@@ -15,9 +15,18 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getRoster, getLootLog, getBisSubmissions,
   getEffectiveDefaultBis, getItemDb, applyRaidBisInference,
-  setRosterStatus, setOwnerNick, setRosterOwner,
+  setRosterStatus, setOwnerNick, setRosterOwner, addRosterChar,
 } from '../../../lib/sheets.js';
-import { toCanonical } from '../../../lib/specs.js';
+import { toCanonical, CLASS_SPECS } from '../../../lib/specs.js';
+
+// Derive tank/healer/DPS role from sheet spec name
+const TANK_SPECS   = new Set(['Blood DK', 'Vengeance DH', 'Guardian Druid', 'Brewmaster Monk', 'Prot Paladin', 'Prot Warrior']);
+const HEALER_SPECS = new Set(['Resto Druid', 'Preservation Evoker', 'Mistweaver Monk', 'Holy Paladin', 'Disc Priest', 'Holy Priest', 'Resto Shaman']);
+function specToRole(spec) {
+  if (TANK_SPECS.has(spec))   return 'Tank';
+  if (HEALER_SPECS.has(spec)) return 'Healer';
+  return 'DPS';
+}
 
 const router = Router();
 router.use(requireAuth);
@@ -49,6 +58,37 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[ROSTER] Error:', err);
     res.status(500).json({ error: 'Failed to load roster' });
+  }
+});
+
+// ── POST /api/roster ──────────────────────────────────────────────────────────
+
+router.post('/', async (req, res) => {
+  const { teamSheetId } = req.session.user;
+  const { charName, class: cls, spec, status = 'Active' } = req.body;
+
+  if (!charName?.trim()) return res.status(400).json({ error: 'charName is required' });
+  if (!cls?.trim())      return res.status(400).json({ error: 'class is required' });
+  if (!spec?.trim())     return res.status(400).json({ error: 'spec is required' });
+  if (!CLASS_SPECS[cls]?.includes(spec)) {
+    return res.status(400).json({ error: 'Invalid class/spec combination' });
+  }
+  if (!['Active', 'Bench', 'Inactive'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+
+  try {
+    const roster = await getRoster(teamSheetId);
+    if (roster.some(r => r.charName === charName.trim())) {
+      return res.status(409).json({ error: 'Character already exists on this roster' });
+    }
+
+    const role = specToRole(spec.trim());
+    await addRosterChar(teamSheetId, charName.trim(), cls.trim(), spec.trim(), role, status);
+    res.json({ charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: '', ownerNick: '' });
+  } catch (err) {
+    console.error('[ROSTER] Add character error:', err);
+    res.status(500).json({ error: 'Failed to add character' });
   }
 });
 

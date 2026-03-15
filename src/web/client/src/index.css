@@ -313,6 +313,12 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 
 .roster-page { display: flex; flex-direction: column; }
 
+.roster-header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .roster-counts {
   display: flex;
   gap: 16px;
@@ -529,6 +535,28 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
   padding-top: 6px;
   color: var(--text);
 }
+
+.add-char-form { margin-bottom: 16px; }
+
+.add-char-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.add-char-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.add-char-select:focus { outline: none; border-color: var(--accent); }
+.add-char-select:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.add-char-actions { display: flex; gap: 8px; }
 
 /* ── End roster ───────────────────────────────────────────────────────────── */
 

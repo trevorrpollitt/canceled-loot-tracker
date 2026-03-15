@@ -8,7 +8,7 @@
 
 import { Router } from 'express';
 import { getAllTeams } from '../../../lib/teams.js';
-import { getRoster } from '../../../lib/sheets.js';
+import { getRoster, getConfig } from '../../../lib/sheets.js';
 
 const router       = Router();
 const DISCORD_API  = 'https://discord.com/api/v10';
@@ -59,20 +59,7 @@ router.get('/callback', async (req, res) => {
     const discordUser = await userRes.json();
     console.log(`[AUTH] Discord user: id=${discordUser.id} username=${discordUser.username}`);
 
-    // 3. Check officer role via guild member (uses bot token)
-    let guildRoles = [];
-    const guildId = process.env.DISCORD_GUILD_ID;
-    if (guildId) {
-      const memberRes = await fetch(`${DISCORD_API}/guilds/${guildId}/members/${discordUser.id}`, {
-        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
-      });
-      if (memberRes.ok) {
-        const member = await memberRes.json();
-        guildRoles = member.roles ?? [];
-      }
-    }
-
-    // 4. Resolve team and ALL characters for this Discord user from roster
+    // 3. Resolve team and ALL characters for this Discord user from roster
     let resolvedTeam  = null;
     let resolvedChars = [];
     for (const team of getAllTeams()) {
@@ -89,11 +76,35 @@ router.get('/callback', async (req, res) => {
     // Active character defaults to the first one found
     const activeChar = resolvedChars[0] ?? null;
 
-    // 5. Determine officer status
-    const officerRoleId = resolvedTeam?.officerRoleId;
+    // 4. Read team config from sheet (guild ID + officer role ID live there)
+    let teamConfig = {};
+    if (resolvedTeam) {
+      try {
+        teamConfig = await getConfig(resolvedTeam.sheetId);
+      } catch (err) {
+        console.warn(`[AUTH] Could not read Config for team "${resolvedTeam.name}":`, err.message);
+      }
+    }
+
+    // 5. Check officer role via guild member (uses bot token)
+    //    guild_id comes from the Config sheet; bot token from env
+    let guildRoles = [];
+    const guildId = teamConfig.guild_id || null;
+    if (guildId) {
+      const memberRes = await fetch(`${DISCORD_API}/guilds/${guildId}/members/${discordUser.id}`, {
+        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
+      });
+      if (memberRes.ok) {
+        const member = await memberRes.json();
+        guildRoles = member.roles ?? [];
+      }
+    }
+
+    // 6. Determine officer status using role ID from Config sheet
+    const officerRoleId = teamConfig.officer_role_id || null;
     const isOfficer     = officerRoleId ? guildRoles.includes(officerRoleId) : false;
 
-    // 6. Store session — chars holds the full list for the account switcher
+    // 7. Store session — chars holds the full list for the account switcher
     req.session.user = {
       id:          discordUser.id,
       username:    discordUser.username,

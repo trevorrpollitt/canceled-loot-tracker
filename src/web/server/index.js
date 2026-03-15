@@ -8,6 +8,7 @@
 import express from 'express';
 import session from 'express-session';
 import cors from 'cors';
+import { initTeams } from '../../lib/teams.js';
 
 import authRouter      from './routes/auth.js';
 import meRouter        from './routes/me.js';
@@ -53,6 +54,10 @@ app.use('/api/loot',      lootRouter);
 app.use('/api/roster',    rosterRouter);
 
 // ── Start ──────────────────────────────────────────────────────────────────────
+
+// Load per-team config from each sheet before accepting requests.
+// This populates guildId and officerRoleId so auth works on first login.
+await initTeams();
 
 app.listen(PORT, () => {
   console.log(`[WEB] Server running on http://localhost:${PORT}`);

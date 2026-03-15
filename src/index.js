@@ -10,7 +10,7 @@ import { Client, GatewayIntentBits, Collection } from 'discord.js';
 import { readdirSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { join, dirname } from 'path';
-import { getAllTeams } from './lib/teams.js';
+import { getAllTeams, initTeams } from './lib/teams.js';
 import { ensurePanels } from './lib/panels.js';
 import { getConfig } from './lib/sheets.js';
 
@@ -108,5 +108,10 @@ client.once('ready', async () => {
 });
 
 // ── Login ─────────────────────────────────────────────────────────────────────
+
+// Load per-team config from each sheet before connecting to Discord.
+// This populates consoleChannelId, officerRoleId, guildId, etc. so that
+// button handlers and panel posting work correctly from the first interaction.
+await initTeams();
 
 client.login(process.env.DISCORD_TOKEN);

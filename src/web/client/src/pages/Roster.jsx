@@ -10,6 +10,22 @@ const ALL_SLOTS = [
 const SENTINELS       = new Set(['<Tier>', '<Catalyst>', '<Crafted>']);
 const DIFFICULTY_ORDER = ['Mythic', 'Heroic', 'Normal'];
 
+const CLASS_SPECS = {
+  'Death Knight':  ['Blood DK', 'Frost DK', 'Unholy DK'],
+  'Demon Hunter':  ['Havoc DH', 'Vengeance DH'],
+  'Druid':         ['Balance Druid', 'Feral Druid', 'Guardian Druid', 'Resto Druid'],
+  'Evoker':        ['Devastation Evoker', 'Augmentation Evoker', 'Preservation Evoker'],
+  'Hunter':        ['BM Hunter', 'MM Hunter', 'SV Hunter'],
+  'Mage':          ['Arcane Mage', 'Fire Mage', 'Frost Mage'],
+  'Monk':          ['Brewmaster Monk', 'Mistweaver Monk', 'Windwalker Monk'],
+  'Paladin':       ['Holy Paladin', 'Prot Paladin', 'Ret Paladin'],
+  'Priest':        ['Disc Priest', 'Holy Priest', 'Shadow Priest'],
+  'Rogue':         ['Assassination Rogue', 'Outlaw Rogue', 'Subtlety Rogue'],
+  'Shaman':        ['Ele Shaman', 'Enh Shaman', 'Resto Shaman'],
+  'Warlock':       ['Affliction Lock', 'Demo Lock', 'Destro Lock'],
+  'Warrior':       ['Arms Warrior', 'Fury Warrior', 'Prot Warrior'],
+};
+
 const UPGRADE_BADGE = {
   'BIS':      { label: 'BIS',      className: 'badge-bis'     },
   'Non-BIS':  { label: 'Non-BIS',  className: 'badge-nonbis'  },
@@ -297,6 +313,81 @@ function CharacterDetail({ charName, onClose }) {
   );
 }
 
+// ── Add character form ─────────────────────────────────────────────────────────
+
+function AddCharForm({ onSave, onCancel }) {
+  const [charName, setCharName] = useState('');
+  const [cls, setCls]           = useState('');
+  const [spec, setSpec]         = useState('');
+  const [status, setStatus]     = useState('Active');
+  const [saving, setSaving]     = useState(false);
+  const [error, setError]       = useState(null);
+
+  const specs = cls ? (CLASS_SPECS[cls] ?? []) : [];
+
+  const handleClassChange = (e) => {
+    setCls(e.target.value);
+    setSpec('');
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!charName.trim() || !cls || !spec) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/roster', {
+        method:      'POST',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+        body:        JSON.stringify({ charName: charName.trim(), class: cls, spec, status }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? res.status);
+      onSave(body);
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="add-char-form card" onSubmit={handleSubmit}>
+      <h3 className="card-title">Add Character</h3>
+      <div className="add-char-fields">
+        <input
+          className="roster-player-input"
+          placeholder="Character name"
+          value={charName}
+          autoFocus
+          onChange={e => setCharName(e.target.value)}
+          onKeyDown={e => e.key === 'Escape' && onCancel()}
+        />
+        <select className="add-char-select" value={cls} onChange={handleClassChange}>
+          <option value="">Class…</option>
+          {Object.keys(CLASS_SPECS).map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select className="add-char-select" value={spec} onChange={e => setSpec(e.target.value)} disabled={!cls}>
+          <option value="">Spec…</option>
+          {specs.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select className="add-char-select" value={status} onChange={e => setStatus(e.target.value)}>
+          <option value="Active">Active</option>
+          <option value="Bench">Bench</option>
+          <option value="Inactive">Inactive</option>
+        </select>
+      </div>
+      {error && <div className="error" style={{ marginTop: '8px' }}>{error}</div>}
+      <div className="add-char-actions">
+        <button type="submit" className="btn-primary btn-sm" disabled={saving || !charName.trim() || !cls || !spec}>
+          {saving ? 'Adding…' : 'Add Character'}
+        </button>
+        <button type="button" className="btn-sm" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
 // ── Roster page ────────────────────────────────────────────────────────────────
 
 export default function RosterPage() {
@@ -304,6 +395,7 @@ export default function RosterPage() {
   const [loading, setLoading]               = useState(true);
   const [error, setError]                   = useState(null);
   const [selectedChar, setSelectedChar]     = useState(null);
+  const [showAddForm, setShowAddForm]       = useState(false);
   const [toggling, setToggling]             = useState(null); // charName being status-toggled
   const [copiedChar, setCopiedChar]         = useState(null); // charName whose Discord ID was just copied
   const [editingOwnerChar, setEditingOwnerChar] = useState(null); // charName whose player name is being edited
@@ -456,14 +548,38 @@ export default function RosterPage() {
     <div className="roster-page">
       <div className="page-header">
         <h2 className="page-title">Roster</h2>
-        <div className="roster-counts">
-          <span><span className="roster-count-dot dot-active" />Active {active}</span>
-          <span><span className="roster-count-dot dot-bench"  />Bench {bench}</span>
-          {inactive > 0 && (
-            <span><span className="roster-count-dot dot-inactive" />Inactive {inactive}</span>
-          )}
+        <div className="roster-header-right">
+          <div className="roster-counts">
+            <span><span className="roster-count-dot dot-active" />Active {active}</span>
+            <span><span className="roster-count-dot dot-bench"  />Bench {bench}</span>
+            {inactive > 0 && (
+              <span><span className="roster-count-dot dot-inactive" />Inactive {inactive}</span>
+            )}
+          </div>
+          <button className="btn-primary btn-sm" onClick={() => setShowAddForm(f => !f)}>
+            {showAddForm ? 'Cancel' : '+ Add Character'}
+          </button>
         </div>
       </div>
+
+      {showAddForm && (
+        <AddCharForm
+          onSave={newChar => {
+            // Insert into sorted position: Active/Bench alpha first, Inactive alpha last
+            setRoster(prev => {
+              const next = [...prev, newChar];
+              return next.sort((a, b) => {
+                const ai = a.status === 'Inactive' ? 1 : 0;
+                const bi = b.status === 'Inactive' ? 1 : 0;
+                if (ai !== bi) return ai - bi;
+                return a.charName.localeCompare(b.charName);
+              });
+            });
+            setShowAddForm(false);
+          }}
+          onCancel={() => setShowAddForm(false)}
+        />
+      )}
 
       <section className="card">
         <table className="roster-table">

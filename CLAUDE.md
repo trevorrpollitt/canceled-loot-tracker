@@ -78,14 +78,12 @@ config/
 
 ## Multi-team model
 - Each team has its own Google Sheet (same schema)
-- Teams configured entirely via env vars — no code changes to add a team:
+- Adding a new team = one env var + populate that team's Config sheet. No code changes:
   ```
-  TEAM_MYTHIC_SHEET_ID=...
-  TEAM_MYTHIC_CONSOLE_CHANNEL=...   <- the #raid-console channel ID
-  TEAM_MYTHIC_BRIEF_CHANNEL=...
-  TEAM_MYTHIC_OFFICER_ROLE=...
-  TEAM_MYTHIC_MEMBER_ROLE=...
+  TEAM_MYTHIC_SHEET_ID=...   <- the only env var needed per team
   ```
+- All other team config lives in the Config sheet tab (channel IDs, role IDs, guild ID).
+  `initTeams()` reads this at startup and populates the in-memory team objects.
 - `getTeamByChannel(channelId)` in `teams.js` resolves which team an interaction belongs to
 - All sheet helpers take `sheetId` as first argument so the same function serves all teams
 
@@ -145,6 +143,7 @@ Each team has one Sheet with these tabs. Column order is the source of truth.
 ### Config (A=Key B=Value)
 Key settings:
 - `console_message_ids`       — JSON map of panel name -> Discord message ID (written by bot on setup)
+- `guild_id`                  — Discord guild (server) ID; required for officer role checks on web login
 - `officer_role_id`           — Discord role ID for officers
 - `team_role_id`              — Discord role ID for team members
 - `console_channel_id`        — #raid-console channel ID

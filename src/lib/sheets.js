@@ -272,6 +272,23 @@ export async function setRosterStatus(sheetId, charName, status) {
 }
 
 /**
+ * Append a new character row to the Roster tab.
+ * Role is derived from spec here because the onEdit Apps Script trigger
+ * only fires on manual sheet edits, not API writes.
+ *
+ * @param {string} sheetId
+ * @param {string} charName
+ * @param {string} cls       e.g. "Death Knight"
+ * @param {string} spec      e.g. "Blood DK"
+ * @param {string} role      e.g. "Tank" (pre-computed by caller)
+ * @param {string} status    "Active" | "Bench" | "Inactive"
+ */
+export async function addRosterChar(sheetId, charName, cls, spec, role, status) {
+  await appendRows(sheetId, 'Roster!A:G', [[charName, cls, spec, role, status, '', '']]);
+  cacheInvalidate(sheetId, 'roster');
+}
+
+/**
  * Loot Log tab  (A=Id B=RaidId C=Date D=Boss E=ItemName F=Difficulty
  *                G=RecipientId H=RecipientChar I=UpgradeType J=Notes)
  * @param {string} sheetId
