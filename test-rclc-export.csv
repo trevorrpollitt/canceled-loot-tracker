@@ -1,0 +1,12 @@
+player,date,time,item,itemID,itemString,response,votes,class,instance,boss,gear1,gear2,responseID,isAwardReason,rollType,subType,equipLoc,note,owner
+Anzhem-Area52,03/14/26,21:15:00,[Weight of Command],249293,item:249293:::::::,Best in Slot,2,SHAMAN,The Voidspire-Mythic,Imperator Averzian,,,1,1,normal,,INVTYPE_WEAPON,,Anzhem-Area52
+Drood-Area52,03/14/26,21:18:00,[Devouring Night's Visage],249306,item:249306:::::::,Best in Slot,3,DRUID,The Voidspire-Mythic,Imperator Averzian,,,1,1,normal,,INVTYPE_HEAD,,Drood-Area52
+Dik-Area52,03/14/26,21:22:00,[Light-Judged Spaulders],249313,item:249313:::::::,Item Upgrade,1,DEATHKNIGHT,The Voidspire-Mythic,Imperator Averzian,,,2,1,normal,,INVTYPE_SHOULDER,,Dik-Area52
+Dargon-Area52,03/14/26,21:35:00,[Robes of the Voidbound],249310,item:249310:::::::,Best in Slot,2,EVOKER,The Voidspire-Mythic,Imperator Averzian,,,1,1,normal,,INVTYPE_CHEST,,Dargon-Area52
+Monkey-Area52,03/14/26,21:50:00,[Void-Skinned Bracers],249326,item:249326:::::::,Best in Slot,1,MONK,The Voidspire-Mythic,Vorasius,,,1,1,normal,,INVTYPE_WRIST,,Monkey-Area52
+Slappy-Area52,03/14/26,21:52:00,[Parasite Stompers],249332,item:249332:::::::,Item Upgrade,0,WARRIOR,The Voidspire-Mythic,Vorasius,,,2,1,normal,,INVTYPE_FEET,,Slappy-Area52
+Chicken-Area52,03/14/26,22:01:00,[Heart of Ancient Hunger],249342,item:249342:::::::,Tertiary or Sidegrade,0,DRUID,The Voidspire-Mythic,Vorasius,,,3,1,normal,,INVTYPE_TRINKET,,Chicken-Area52
+Drood-Area52,03/14/26,22:10:00,[Inescapable Reach],249302,item:249302:::::::,Offspec,0,DRUID,The Voidspire-Mythic,Vorasius,,,4,0,normal,,INVTYPE_2HWEAPON,,Drood-Area52
+Anzhem-Area52,03/14/26,22:25:00,[Blade of the Final Twilight],249281,item:249281:::::::,Best in Slot,3,SHAMAN,The Voidspire-Mythic,Fallen-King Salhadaar,,,1,1,normal,,INVTYPE_2HWEAPON,,Anzhem-Area52
+Monkey-Area52,03/14/26,22:40:00,[Void-Touched Curio],249367,item:249367:::::::,Best in Slot,4,MONK,The Voidspire-Mythic,Fallen-King Salhadaar,,,1,1,normal,,,Monkey-Area52
+Anzhem-Area52,03/14/26,21:15:00,[Weight of Command],249293,item:249293:::::::,Best in Slot,2,SHAMAN,The Voidspire-Mythic,Imperator Averzian,,,1,1,normal,,INVTYPE_WEAPON,,Anzhem-Area52

@@ -1,0 +1,9 @@
+node_modules/
+.env
+config/service-account.json
+*.log
+
+# Claude Code session files
+.claude/settings.local.json
+.claude/plan.md
+memory/
