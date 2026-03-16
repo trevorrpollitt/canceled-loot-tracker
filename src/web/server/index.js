@@ -55,6 +55,14 @@ app.route('/api/council',   councilRouter);
 app.route('/api/loot',      lootRouter);
 app.route('/api/roster',    rosterRouter);
 
+// ── SPA fallback ────────────────────────────────────────────────────────────
+// For any non-API route (e.g. /login, /bis, /council), serve index.html and
+// let React Router handle client-side routing.
+app.get('/*', async (c) => {
+  const indexUrl = new URL('/index.html', new URL(c.req.url).origin);
+  return c.env.ASSETS.fetch(indexUrl.toString());
+});
+
 console.log('[WEB] Worker ready');
 
 export default app;
