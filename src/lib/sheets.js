@@ -167,8 +167,7 @@ async function cachedRead(sheetId, tabKey, fn) {
   const result = await fn();
   cacheSet(key, result);
   const count = result instanceof Map ? result.size : Array.isArray(result) ? result.length : 1;
-  log.verbose(`[sheets] cached     ${tabKey} (sheet ${sheetId.slice(-6)}) — ${count} ${count === 1 && !(result instanceof Map) && !Array.isArray(result) ? 'entry' : 'entries'}`);
-  log.debug(`[sheets] ${tabKey} data:`, result);
+  log.verbose(`[sheets] cached     ${tabKey} (sheet ${sheetId.slice(-6)}) — ${count} entries`);
   return result;
 }
 

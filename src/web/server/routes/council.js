@@ -13,6 +13,7 @@ import {
   getEffectiveDefaultBis, getRaids, getConfig,
 } from '../../../lib/sheets.js';
 import { toCanonical, getArmorType, canUseWeapon } from '../../../lib/specs.js';
+import { log } from '../../../lib/logger.js';
 
 const router = new Hono();
 router.use('*', requireAuth);
@@ -169,6 +170,13 @@ router.get('/candidates', async (c) => {
       });
     }
 
+    log.verbose(`[council] /candidates item="${item.name}" (${item.slot}) → ${candidates.length} eligible candidates`);
+    log.debug('[council] /candidates results:', candidates.map(c => ({
+      char: c.charName, spec: c.spec,
+      bisH: c.bisH, bisM: c.bisM, nonBisH: c.nonBisH, nonBisM: c.nonBisM,
+      raids: c.raidsAttended,
+      overallBis: c.overallBisMatch, raidBis: c.raidBisMatch,
+    })));
     return c.json({ item: { itemId: item.itemId, name: item.name, slot: item.slot, armorType: item.armorType, isTierToken: item.isTierToken, sourceName: item.sourceName, difficulty: item.difficulty }, candidates });
   } catch (err) {
     console.error('[council] GET /candidates error:', err);
@@ -250,6 +258,13 @@ router.get('/curio-candidates', async (c) => {
       return (a.bisN + a.bisH + a.bisM) - (b.bisN + b.bisH + b.bisM);
     });
 
+    log.verbose(`[council] /curio-candidates → ${candidates.length} candidates`);
+    log.debug('[council] /curio-candidates results:', candidates.map(c => ({
+      char: c.charName, spec: c.spec,
+      tierSlotsWanted: c.tierSlotsWanted,
+      bisH: c.bisH, bisM: c.bisM,
+      raids: c.raidsAttended,
+    })));
     return c.json({ curioItemId: config.curio_item_id ?? '', candidates });
   } catch (err) {
     console.error('[council] GET /curio-candidates error:', err);
