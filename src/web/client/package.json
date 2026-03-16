@@ -1,5 +1,5 @@
 {
-  "name": "canceled-loot-tracker-web",
+  "name": "canceled-loot-tracker-web-client",
   "version": "0.1.0",
   "type": "module",
   "scripts": {

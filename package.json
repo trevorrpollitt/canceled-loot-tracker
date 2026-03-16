@@ -1,31 +1,12 @@
 {
-  "name": "canceled-loot-tracker-web",
-  "version": "0.1.0",
-  "description": "Canceled guild loot tracker web app",
-  "type": "module",
+  "name": "loot-tracker-monorepo",
+  "private": true,
+  "workspaces": [
+    "src/web/client",
+    "src/web/server"
+  ],
   "scripts": {
-    "dev": "wrangler dev --port 3001",
-    "deploy": "wrangler deploy",
-    "start": "npm --prefix src/web run start",
-    "build": "npm --prefix src/web run build",
-    "seed:list": "node --env-file=.env scripts/seed-item-db.js list",
-    "seed:raid": "node --env-file=.env scripts/seed-item-db.js raid",
-    "seed:dungeon": "node --env-file=.env scripts/seed-item-db.js dungeon",
-    "seed:sync": "node --env-file=.env scripts/seed-item-db.js sync",
-    "seed:guide": "node --env-file=.env scripts/seed-item-db.js guide",
-    "seed:wowhead": "node --env-file=.env scripts/seed-item-db.js wowhead",
-    "seed:s1mplus": "node --env-file=.env scripts/seed-item-db.js s1mplus https://www.wowhead.com/guide/midnight/season-1-mythic-rewards-loot-drops-mounts-achievements",
-    "seed:bis": "node --env-file=.env scripts/seed-default-bis.js fetch",
-    "seed:bis-all": "node --env-file=.env scripts/seed-default-bis.js fetch-all",
-    "seed:bis-list": "node --env-file=.env scripts/seed-default-bis.js list",
-    "backfill:weapons": "node --env-file=.env scripts/backfill-weapon-types.js"
-  },
-  "dependencies": {
-    "@hono/node-server": "^1.19.11",
-    "dotenv": "^16.4.5",
-"hono": "^4.12.8"
-  },
-  "devDependencies": {
-    "wrangler": "^3.0.0"
+    "build": "npm run build --workspaces",
+    "dev": "npm run dev --workspaces"
   }
 }
