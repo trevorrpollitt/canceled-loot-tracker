@@ -1,14 +1,15 @@
 /**
- * server/index.js — Express entry point for the web app.
+ * server/index.js — Hono entry point for the web app (Cloudflare Workers).
  *
- * Env vars are loaded via --env-file flag in the dev:server script,
- * ensuring they are available before any module is evaluated.
+ * Environment variables come from process.env, which is populated by:
+ *   Local dev  → wrangler dev reads .dev.vars (or --env-file flag)
+ *   Production → Cloudflare Worker secrets / env vars
  */
 
-import express from 'express';
-import session from 'express-session';
-import cors from 'cors';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { initTeams } from '../../lib/teams.js';
+import { sessionMiddleware } from './session.js';
 
 import authRouter      from './routes/auth.js';
 import meRouter        from './routes/me.js';
@@ -19,46 +20,41 @@ import councilRouter   from './routes/council.js';
 import lootRouter      from './routes/loot.js';
 import rosterRouter    from './routes/roster.js';
 
-const app  = express();
-const PORT = process.env.WEB_PORT ?? 3001;
+const app = new Hono();
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 
-app.use(cors({
+app.use('*', cors({
   origin:      process.env.CLIENT_URL ?? 'http://localhost:3000',
   credentials: true,
 }));
 
-app.use(express.json());
+app.use('*', sessionMiddleware());
 
-app.use(session({
-  secret:            process.env.SESSION_SECRET ?? 'dev-secret-change-in-prod',
-  resave:            false,
-  saveUninitialized: false,
-  cookie: {
-    secure:   process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    maxAge:   7 * 24 * 60 * 60 * 1000, // 7 days
-  },
-}));
+// ── Lazy team initialisation ───────────────────────────────────────────────────
+// Workers disallow fetch() at module load time (global scope).
+// We init once on the first request and cache the promise so concurrent
+// requests still wait for the same initialisation rather than racing.
+
+let _teamsReady = null;
+
+app.use('*', async (_c, next) => {
+  if (!_teamsReady) _teamsReady = initTeams();
+  await _teamsReady;
+  await next();
+});
 
 // ── Routes ─────────────────────────────────────────────────────────────────────
 
-app.use('/api/auth',      authRouter);
-app.use('/api/me',        meRouter);
-app.use('/api/dashboard', dashboardRouter);
-app.use('/api/bis',       bisRouter);
-app.use('/api/admin',     adminRouter);
-app.use('/api/council',   councilRouter);
-app.use('/api/loot',      lootRouter);
-app.use('/api/roster',    rosterRouter);
+app.route('/api/auth',      authRouter);
+app.route('/api/me',        meRouter);
+app.route('/api/dashboard', dashboardRouter);
+app.route('/api/bis',       bisRouter);
+app.route('/api/admin',     adminRouter);
+app.route('/api/council',   councilRouter);
+app.route('/api/loot',      lootRouter);
+app.route('/api/roster',    rosterRouter);
 
-// ── Start ──────────────────────────────────────────────────────────────────────
+console.log('[WEB] Worker ready');
 
-// Load per-team config from each sheet before accepting requests.
-// This populates guildId and officerRoleId so auth works on first login.
-await initTeams();
-
-app.listen(PORT, () => {
-  console.log(`[WEB] Server running on http://localhost:${PORT}`);
-});
+export default app;

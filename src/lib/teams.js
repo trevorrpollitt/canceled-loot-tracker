@@ -50,7 +50,7 @@ export async function initTeams() {
   }
 
   for (const { name, sheetId } of registry) {
-    TEAMS[name] = {
+    TEAMS[name.toLowerCase()] = {
       name,
       sheetId,
       consoleChannelId: null,

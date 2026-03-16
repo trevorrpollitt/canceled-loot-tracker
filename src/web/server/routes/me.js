@@ -3,41 +3,72 @@
  *
  * GET  /api/me
  *   Returns the current session user (safe subset — no access token).
- *   Includes the full `chars` array so the UI can render the character switcher.
  *
  * POST /api/me/active-char
  *   Body: { charName }
- *   Switches the active character within the session. The charName must belong
- *   to this Discord account (i.e. be present in session.user.chars).
+ *   Switches the active character within the current team.
+ *
+ * POST /api/me/active-team
+ *   Body: { teamName }
+ *   Switches the active team. Updates all active team/char session fields.
+ *   Officer status is pre-computed per team at login — no re-fetch needed.
  */
 
-import { Router } from 'express';
+import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 
-const router = Router();
+const router = new Hono();
 
-router.get('/', (req, res) => {
-  if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
+router.get('/', (c) => {
+  const session = c.get('session');
+  if (!session?.user) return c.json({ error: 'Not authenticated' }, 401);
 
-  const { id, username, avatar, teamName, charName, spec, role, status, isOfficer, chars } = req.session.user;
-  res.json({ id, username, avatar, teamName, charName, spec, role, status, isOfficer, chars: chars ?? [] });
+  const {
+    id, username, avatar,
+    teamName, charName, spec, role, status, isOfficer,
+    chars, teams,
+  } = session.user;
+  return c.json({ id, username, avatar, teamName, charName, spec, role, status, isOfficer, chars: chars ?? [], teams: teams ?? [] });
 });
 
-router.post('/active-char', requireAuth, (req, res) => {
-  const { charName } = req.body;
-  if (!charName) return res.status(400).json({ error: 'charName is required' });
+router.post('/active-char', requireAuth, async (c) => {
+  const { charName } = await c.req.json();
+  if (!charName) return c.json({ error: 'charName is required' }, 400);
 
-  const { chars = [] } = req.session.user;
-  const target = chars.find(c => c.charName === charName);
-  if (!target) return res.status(400).json({ error: 'Character not found on this account' });
+  const session     = c.get('session');
+  const { chars = [] } = session.user;
+  const target = chars.find(ch => ch.charName === charName);
+  if (!target) return c.json({ error: 'Character not found on this account' }, 400);
 
-  // Update the active character fields in the session
-  req.session.user.charName = target.charName;
-  req.session.user.spec     = target.spec;
-  req.session.user.role     = target.role;
-  req.session.user.status   = target.status;
+  session.user.charName = target.charName;
+  session.user.spec     = target.spec;
+  session.user.role     = target.role;
+  session.user.status   = target.status;
 
-  res.json({ ok: true, charName: target.charName, spec: target.spec });
+  return c.json({ ok: true, charName: target.charName, spec: target.spec });
+});
+
+router.post('/active-team', requireAuth, async (c) => {
+  const { teamName } = await c.req.json();
+  if (!teamName) return c.json({ error: 'teamName is required' }, 400);
+
+  const session      = c.get('session');
+  const { teams = [] } = session.user;
+  const target = teams.find(t => t.teamName === teamName);
+  if (!target) return c.json({ error: 'Team not found for this account' }, 400);
+
+  const activeChar = target.chars[0] ?? null;
+
+  session.user.teamName    = target.teamName;
+  session.user.teamSheetId = target.teamSheetId;
+  session.user.isOfficer   = target.isOfficer;
+  session.user.chars       = target.chars;
+  session.user.charName    = activeChar?.charName ?? null;
+  session.user.spec        = activeChar?.spec     ?? null;
+  session.user.role        = activeChar?.role     ?? null;
+  session.user.status      = activeChar?.status   ?? null;
+
+  return c.json({ ok: true, teamName: target.teamName });
 });
 
 export default router;

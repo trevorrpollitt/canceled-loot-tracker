@@ -54,6 +54,27 @@ a:hover { color: var(--primary-h); }
 .nav-user   { color: var(--text-muted); font-size: 13px; }
 .nav-logout { font-size: 13px; }
 
+.team-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.team-banner-label { font-size: 12px; color: var(--text); text-transform: uppercase; letter-spacing: 0.06em; }
+.team-banner-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.team-banner-select:focus { outline: none; border-color: var(--primary); }
+
 .main { flex: 1; padding: 32px 24px; max-width: 960px; margin: 0 auto; width: 100%; }
 
 /* ── Cards ──────────────────────────────────────────────────────────────────── */

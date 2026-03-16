@@ -1,10 +1,10 @@
 /**
- * requireAuth.js — Express middleware that rejects unauthenticated requests.
+ * requireAuth.js — Hono middleware that rejects unauthenticated requests.
  */
 
-export function requireAuth(req, res, next) {
-  if (!req.session?.user) {
-    return res.status(401).json({ error: 'Not authenticated' });
+export async function requireAuth(c, next) {
+  if (!c.get('session')?.user) {
+    return c.json({ error: 'Not authenticated' }, 401);
   }
-  next();
+  await next();
 }

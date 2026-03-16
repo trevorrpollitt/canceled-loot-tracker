@@ -4,7 +4,7 @@
  * POST /api/loot/import   Officer — import a RCLC CSV export
  */
 
-import { Router } from 'express';
+import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getRoster, getRclcResponseMap,
@@ -12,28 +12,23 @@ import {
 } from '../../../lib/sheets.js';
 import { parseRclcCsv, buildLootEntries, buildExistingKeys } from '../../../lib/rclc.js';
 
-const router = Router();
-router.use(requireAuth);
+const router = new Hono();
+router.use('*', requireAuth);
 
-// ── POST /api/loot/import ─────────────────────────────────────────────────────
-
-router.post('/import', async (req, res) => {
-  if (!req.session.user?.isOfficer) {
-    return res.status(403).json({ error: 'Officer access required.' });
+router.post('/import', async (c) => {
+  if (!c.get('session').user?.isOfficer) {
+    return c.json({ error: 'Officer access required.' }, 403);
   }
 
-  const { csvText } = req.body;
+  const { csvText } = await c.req.json();
   if (!csvText || typeof csvText !== 'string') {
-    return res.status(400).json({ error: 'csvText is required.' });
+    return c.json({ error: 'csvText is required.' }, 400);
   }
 
   try {
-    const { teamSheetId } = req.session.user;
-
+    const { teamSheetId } = c.get('session').user;
     const rows = parseRclcCsv(csvText);
-    if (!rows.length) {
-      return res.status(400).json({ error: 'CSV appears to be empty or invalid.' });
-    }
+    if (!rows.length) return c.json({ error: 'CSV appears to be empty or invalid.' }, 400);
 
     const [roster, responseMap, existingLog] = await Promise.all([
       getRoster(teamSheetId),
@@ -44,19 +39,12 @@ router.post('/import', async (req, res) => {
     const existingKeys = buildExistingKeys(existingLog);
     const { entries, warnings, skipped } = buildLootEntries(rows, roster, responseMap, existingKeys);
 
-    if (entries.length) {
-      await appendLootEntries(teamSheetId, entries);
-    }
+    if (entries.length) await appendLootEntries(teamSheetId, entries);
 
-    res.json({
-      imported: entries.length,
-      skipped,
-      total:    rows.length,
-      warnings,
-    });
+    return c.json({ imported: entries.length, skipped, total: rows.length, warnings });
   } catch (err) {
     console.error('[LOOT IMPORT]', err);
-    res.status(500).json({ error: 'Import failed. Check server logs.' });
+    return c.json({ error: 'Import failed. Check server logs.' }, 500);
   }
 });
 

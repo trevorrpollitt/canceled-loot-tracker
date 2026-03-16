@@ -1,0 +1,9 @@
+name = "canceled-loot-tracker"
+main = "src/web/server/index.js"
+compatibility_date = "2026-03-15"
+compatibility_flags = [ "nodejs_compat" ]
+
+# This maps your worker to the subpath we discussed
+[[routes]]
+pattern = "www.canceledwow.com/loot*"
+zone_name = "canceledwow.com"

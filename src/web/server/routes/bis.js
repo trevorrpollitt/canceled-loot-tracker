@@ -2,18 +2,10 @@
  * bis.js — Raider BIS submission routes.
  *
  * GET  /api/bis
- *   Returns the logged-in player's current BIS submissions for all 16 slots,
- *   plus item selector options and valid sentinels per slot.
- *
  * POST /api/bis
- *   Body: { updates: [{ slot, trueBis, trueBisItemId, raidBis, raidBisItemId, rationale,
- *                       clearPending? }] }
- *   For normal updates: upserts the slot submission (status → Pending).
- *   For clearPending updates: reverts the slot to the last accepted state
- *     (last-approved snapshot if it exists, or deletes the row entirely).
  */
 
-import { Router } from 'express';
+import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getBisSubmissions, getItemDb, getEffectiveDefaultBis, applyRaidBisInference,
@@ -31,12 +23,8 @@ const TIER_SLOTS     = new Set(['Head', 'Shoulders', 'Chest', 'Hands', 'Legs']);
 const CATALYST_SLOTS = new Set(['Neck', 'Back', 'Wrists', 'Waist', 'Feet']);
 const DIFF_ORDER     = { Mythic: 0, Heroic: 1, Normal: 2, 'Mythic+': 3 };
 
-/**
- * Build a sorted item list for a given slot + armor type.
- * raidOnly=true restricts to SourceType=Raid (for the Raid BIS selector).
- */
 function itemOptionsForSlot(itemDb, slot, armorType, { raidOnly = false, canonSpec = '' } = {}) {
-  const dbSlot = slot.replace(/ [12]$/, ''); // Ring 1/2 → Ring, Trinket 1/2 → Trinket
+  const dbSlot = slot.replace(/ [12]$/, '');
   return itemDb
     .filter(item => {
       if (item.slot !== dbSlot)   return false;
@@ -62,14 +50,14 @@ function itemOptionsForSlot(itemDb, slot, armorType, { raidOnly = false, canonSp
     });
 }
 
-const router = Router();
-router.use(requireAuth);
+const router = new Hono();
+router.use('*', requireAuth);
 
 // ── GET /api/bis ───────────────────────────────────────────────────────────────
 
-router.get('/', async (req, res) => {
-  const { teamSheetId, charName, spec } = req.session.user;
-  if (!teamSheetId) return res.json({ noTeam: true });
+router.get('/', async (c) => {
+  const { teamSheetId, charName, spec } = c.get('session').user;
+  if (!teamSheetId) return c.json({ noTeam: true });
 
   try {
     const [submissions, itemDb, effectiveBis] = await Promise.all([
@@ -81,12 +69,10 @@ router.get('/', async (req, res) => {
     const canonicalSpec = toCanonical(spec);
     const armorType     = getArmorType(canonicalSpec);
 
-    // Index personal submissions by slot
     const bySlot = Object.fromEntries(
       submissions.filter(s => s.charName === charName).map(s => [s.slot, s])
     );
 
-    // Spec defaults with Raid BIS inference applied
     const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
     const specDefaults  = applyRaidBisInference(specRows, itemDb);
     const defaultBySlot = Object.fromEntries(specDefaults.map(d => [d.slot, d]));
@@ -95,8 +81,6 @@ router.get('/', async (req, res) => {
       const sub = bySlot[slot] ?? null;
       const def = defaultBySlot[slot] ?? null;
 
-      // Last-approved snapshot — only meaningful when submission is Pending.
-      // Written to cols N–Q when an officer approves; cleared when restored.
       const lastApproved = sub?.lastApprovedTrueBis
         ? {
             trueBis:       sub.lastApprovedTrueBis,
@@ -119,48 +103,46 @@ router.get('/', async (req, res) => {
         sentinels: {
           tier:     TIER_SLOTS.has(slot),
           catalyst: CATALYST_SLOTS.has(slot),
-          crafted:  true,    // <Crafted> is always valid for Overall BIS
+          crafted:  true,
         },
         overallOptions: itemOptionsForSlot(itemDb, slot, armorType, { canonSpec: canonicalSpec }),
         raidOptions:    itemOptionsForSlot(itemDb, slot, armorType, { raidOnly: true, canonSpec: canonicalSpec }),
       };
     });
 
-    res.json({ charName, spec, slots });
+    return c.json({ charName, spec, slots });
   } catch (err) {
     console.error('[BIS] GET error:', err);
-    res.status(500).json({ error: 'Failed to load BIS data' });
+    return c.json({ error: 'Failed to load BIS data' }, 500);
   }
 });
 
 // ── POST /api/bis ──────────────────────────────────────────────────────────────
 
-router.post('/', async (req, res) => {
-  const { updates } = req.body;
+router.post('/', async (c) => {
+  const { updates } = await c.req.json();
   if (!Array.isArray(updates) || !updates.length) {
-    return res.status(400).json({ error: 'updates[] is required' });
+    return c.json({ error: 'updates[] is required' }, 400);
   }
 
-  const { teamSheetId, charName, spec } = req.session.user;
-  if (!teamSheetId) return res.status(400).json({ error: 'No team configured' });
-  if (!charName)    return res.status(400).json({ error: 'No character linked to this account' });
+  const { teamSheetId, charName, spec } = c.get('session').user;
+  if (!teamSheetId) return c.json({ error: 'No team configured' }, 400);
+  if (!charName)    return c.json({ error: 'No character linked to this account' }, 400);
 
   const validSlots = new Set(ALL_SLOTS);
 
-  // clearPending / clearRejected need only a valid slot; regular updates also need trueBis
   const validUpdates = updates.filter(u =>
     validSlots.has(u.slot) && (u.clearPending || u.clearRejected || u.trueBis)
   );
 
   if (!validUpdates.length) {
-    return res.status(400).json({ error: 'No valid updates provided (slot required, trueBis required)' });
+    return c.json({ error: 'No valid updates provided (slot required, trueBis required)' }, 400);
   }
 
   try {
     let saved   = 0;
     let cleared = 0;
 
-    // Clear operations are rare (0–1 per save) — keep sequential
     for (const u of validUpdates.filter(u => u.clearRejected)) {
       await clearRejectedBisSubmission(teamSheetId, charName, u.slot);
       cleared++;
@@ -170,7 +152,6 @@ router.post('/', async (req, res) => {
       cleared++;
     }
 
-    // All normal saves in a single round-trip: 1 read + 1 batchUpdate + 1 append
     const saveUpdates = validUpdates.filter(u => !u.clearPending && !u.clearRejected);
     if (saveUpdates.length) {
       await batchUpsertBisSubmissions(teamSheetId, saveUpdates.map(u => ({
@@ -189,10 +170,10 @@ router.post('/', async (req, res) => {
     const parts = [];
     if (saved)   parts.push(`${saved} slot${saved   !== 1 ? 's' : ''} saved`);
     if (cleared) parts.push(`${cleared} pending submission${cleared !== 1 ? 's' : ''} cleared`);
-    res.json({ ok: true, saved, cleared, message: parts.join(', ') });
+    return c.json({ ok: true, saved, cleared, message: parts.join(', ') });
   } catch (err) {
     console.error('[BIS] POST error:', err);
-    res.status(500).json({ error: 'Failed to save BIS submissions' });
+    return c.json({ error: 'Failed to save BIS submissions' }, 500);
   }
 });
 

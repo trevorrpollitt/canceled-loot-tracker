@@ -14,41 +14,92 @@
  *                              RCLC Response Map.
  *
  * Auth strategy:
- *   Local dev  → GOOGLE_SERVICE_ACCOUNT_KEY_PATH points to a JSON key file
- *   Railway    → GOOGLE_SERVICE_ACCOUNT_KEY_JSON holds the JSON as a single-line string
+ *   Local dev  → node.js reads GOOGLE_SERVICE_ACCOUNT_KEY_PATH key file and injects it
+ *                as GOOGLE_SERVICE_ACCOUNT_KEY_JSON before the app loads
+ *   Production → GOOGLE_SERVICE_ACCOUNT_KEY_JSON is set directly in the environment
  */
 
-import { google } from 'googleapis';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
+// ── Auth — Web Crypto JWT (works in Cloudflare Workers and Node.js 18+) ────────
 
 function loadCredentials() {
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
-    return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON);
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
+    throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY_JSON is not set');
   }
-  const path = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH
-    ?? resolve(__dirname, '../../config/service-account.json');
-  return JSON.parse(readFileSync(path, 'utf8'));
+  return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON);
 }
 
-let _auth = null;
+function b64url(data) {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  let b64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
 
-function getAuth() {
-  if (_auth) return _auth;
-  _auth = new google.auth.GoogleAuth({
-    credentials: loadCredentials(),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+async function makeServiceAccountJwt(creds) {
+  const pem    = creds.private_key;
+  const body   = pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+  const der    = Uint8Array.from(atob(body), c => c.charCodeAt(0));
+  const key    = await crypto.subtle.importKey(
+    'pkcs8', der.buffer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false, ['sign'],
+  );
+  const now     = Math.floor(Date.now() / 1000);
+  const header  = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = b64url(JSON.stringify({
+    iss: creds.client_email, sub: creds.client_email,
+    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now, exp: now + 3600,
+  }));
+  const sig = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5', key,
+    new TextEncoder().encode(`${header}.${payload}`),
+  );
+  return `${header}.${payload}.${b64url(sig)}`;
+}
+
+// Access token cache: { token, expiresAt }
+let _tokenCache = null;
+
+async function getAccessToken() {
+  if (_tokenCache && Date.now() < _tokenCache.expiresAt) return _tokenCache.token;
+  const creds = loadCredentials();
+  const jwt   = await makeServiceAccountJwt(creds);
+  const res   = await fetch('https://oauth2.googleapis.com/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion:  jwt,
+    }),
   });
-  return _auth;
+  if (!res.ok) throw new Error(`Google token exchange failed ${res.status}: ${await res.text()}`);
+  const { access_token, expires_in } = await res.json();
+  _tokenCache = { token: access_token, expiresAt: Date.now() + (expires_in - 60) * 1000 };
+  return access_token;
 }
 
-function client() {
-  return google.sheets({ version: 'v4', auth: getAuth() });
+// ── Sheets REST API helpers ────────────────────────────────────────────────────
+
+const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
+
+async function sheetsRequest(method, url, body) {
+  const token = await getAccessToken();
+  const res   = await fetch(url, {
+    method,
+    headers: {
+      Authorization:  `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    const err  = new Error(`Sheets ${method} ${url} failed ${res.status}: ${text}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
 }
 
 // ── Retry helper ─────────────────────────────────────────────────────────────
@@ -130,12 +181,10 @@ function getMasterSheetId() {
  * @returns {Array<Array<string>>}
  */
 export async function readRange(sheetId, range) {
-  const res = await withRetry(() => client().spreadsheets.values.get({
-    spreadsheetId: sheetId,
-    range,
-    valueRenderOption: 'UNFORMATTED_VALUE',
-  }));
-  return res.data.values ?? [];
+  const qs  = new URLSearchParams({ valueRenderOption: 'UNFORMATTED_VALUE' });
+  const url = `${SHEETS_BASE}/${sheetId}/values/${encodeURIComponent(range)}?${qs}`;
+  const res = await withRetry(() => sheetsRequest('GET', url));
+  return res.values ?? [];
 }
 
 /**
@@ -146,13 +195,9 @@ export async function readRange(sheetId, range) {
  * @param {Array<Array<string>>} rows
  */
 export async function appendRows(sheetId, range, rows) {
-  await withRetry(() => client().spreadsheets.values.append({
-    spreadsheetId: sheetId,
-    range,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: rows },
-  }));
+  const qs  = new URLSearchParams({ valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS' });
+  const url = `${SHEETS_BASE}/${sheetId}/values/${encodeURIComponent(range)}:append?${qs}`;
+  await withRetry(() => sheetsRequest('POST', url, { values: rows }));
 }
 
 /**
@@ -163,12 +208,9 @@ export async function appendRows(sheetId, range, rows) {
  * @param {Array<Array<string>>} values
  */
 export async function writeRange(sheetId, range, values) {
-  await withRetry(() => client().spreadsheets.values.update({
-    spreadsheetId: sheetId,
-    range,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values },
-  }));
+  const qs  = new URLSearchParams({ valueInputOption: 'USER_ENTERED' });
+  const url = `${SHEETS_BASE}/${sheetId}/values/${encodeURIComponent(range)}?${qs}`;
+  await withRetry(() => sheetsRequest('PUT', url, { values }));
 }
 
 /**
@@ -178,10 +220,8 @@ export async function writeRange(sheetId, range, values) {
  * @param {string} range   A1 notation, e.g. "Item DB!A2:I"
  */
 export async function clearRange(sheetId, range) {
-  await withRetry(() => client().spreadsheets.values.clear({
-    spreadsheetId: sheetId,
-    range,
-  }));
+  const url = `${SHEETS_BASE}/${sheetId}/values/${encodeURIComponent(range)}:clear`;
+  await withRetry(() => sheetsRequest('POST', url, {}));
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
@@ -516,12 +556,10 @@ export async function upsertBisSubmission(sheetId, {
  */
 async function batchWriteRanges(sheetId, updates) {
   if (!updates.length) return;
-  await withRetry(() => client().spreadsheets.values.batchUpdate({
-    spreadsheetId: sheetId,
-    requestBody: {
-      valueInputOption: 'USER_ENTERED',
-      data: updates,
-    },
+  const url = `${SHEETS_BASE}/${sheetId}/values:batchUpdate`;
+  await withRetry(() => sheetsRequest('POST', url, {
+    valueInputOption: 'USER_ENTERED',
+    data: updates,
   }));
 }
 
@@ -581,7 +619,18 @@ export async function batchUpsertBisSubmissions(sheetId, updates) {
   });
 
   if (rangeWrites.length) await batchWriteRanges(sheetId, rangeWrites);
-  if (newRows.length)     await appendRows(sheetId, 'BIS Submissions!A:M', newRows);
+  if (newRows.length) {
+    // Use writeRange with explicit row numbers instead of appendRows (:append).
+    // The :append endpoint uses table-detection to find the insert position, which
+    // shifts data right if the sheet's table doesn't start at column A (e.g. A1 is
+    // empty). writeRange bypasses this and always writes to the exact target range.
+    const startRow = rows.length + 2; // data starts at row 2; rows is 0-indexed
+    await writeRange(
+      sheetId,
+      `BIS Submissions!A${startRow}:M${startRow + newRows.length - 1}`,
+      newRows,
+    );
+  }
   cacheInvalidate(sheetId, 'bisSubmissions');
 }
 
@@ -881,13 +930,9 @@ async function ensureSpecBisConfigTab() {
   }
 
   // Add the sheet tab.
-  await withRetry(() => client().spreadsheets.batchUpdate({
-    spreadsheetId: sheetId,
-    requestBody: {
-      requests: [{
-        addSheet: { properties: { title: SPEC_BIS_CONFIG_TAB } },
-      }],
-    },
+  const url = `${SHEETS_BASE}/${sheetId}:batchUpdate`;
+  await withRetry(() => sheetsRequest('POST', url, {
+    requests: [{ addSheet: { properties: { title: SPEC_BIS_CONFIG_TAB } } }],
   }));
 
   // Write the header row.
@@ -1117,12 +1162,10 @@ export async function updateDefaultBisRaidBis(updates) {
 
   if (!batchData.length) return;
 
-  await withRetry(() => client().spreadsheets.values.batchUpdate({
-    spreadsheetId: sheetId,
-    requestBody: {
-      valueInputOption: 'USER_ENTERED',
-      data: batchData,
-    },
+  const url = `${SHEETS_BASE}/${sheetId}/values:batchUpdate`;
+  await withRetry(() => sheetsRequest('POST', url, {
+    valueInputOption: 'USER_ENTERED',
+    data: batchData,
   }));
   cacheInvalidate(sheetId, 'defaultBis', 'effectiveBis');
 }
@@ -1143,7 +1186,7 @@ export async function getTeamRegistry() {
     const rows = await readRange(masterSheetId, 'Teams!A2:B');
     return rows
       .filter(r => r[0] && r[1])
-      .map(r => ({ name: r[0].trim().toLowerCase(), sheetId: r[1].trim() }));
+      .map(r => ({ name: r[0].trim(), sheetId: r[1].trim() }));
   });
 }
 

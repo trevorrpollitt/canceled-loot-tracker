@@ -11,7 +11,7 @@
  * response: raw RCLC button label — mapped via RCLC Response Map sheet tab
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 
 // ── CSV parser ────────────────────────────────────────────────────────────────
 

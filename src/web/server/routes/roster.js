@@ -1,16 +1,16 @@
 /**
  * roster.js — Officer roster routes.
  *
- * GET /api/roster
- *   Returns all characters on the team roster, sorted Active/Bench first
- *   then Inactive, alphabetically within each group.
- *
- * GET /api/roster/:charName
- *   Returns a single character's approved BIS list, spec defaults, and
- *   full loot history — the same data the dashboard shows for that player.
+ * GET    /api/roster
+ * POST   /api/roster
+ * GET    /api/roster/:charName
+ * POST   /api/roster/owner-nick
+ * POST   /api/roster/:charName/owner
+ * DELETE /api/roster/:charName/owner
+ * POST   /api/roster/:charName/status
  */
 
-import { Router } from 'express';
+import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getRoster, getLootLog, getBisSubmissions,
@@ -19,7 +19,6 @@ import {
 } from '../../../lib/sheets.js';
 import { toCanonical, CLASS_SPECS } from '../../../lib/specs.js';
 
-// Derive tank/healer/DPS role from sheet spec name
 const TANK_SPECS   = new Set(['Blood DK', 'Vengeance DH', 'Guardian Druid', 'Brewmaster Monk', 'Prot Paladin', 'Prot Warrior']);
 const HEALER_SPECS = new Set(['Resto Druid', 'Preservation Evoker', 'Mistweaver Monk', 'Holy Paladin', 'Disc Priest', 'Holy Priest', 'Resto Shaman']);
 function specToRole(spec) {
@@ -28,218 +27,155 @@ function specToRole(spec) {
   return 'DPS';
 }
 
-const router = Router();
-router.use(requireAuth);
-
-// Officer-only
-router.use((req, res, next) => {
-  if (!req.session.user?.isOfficer) return res.status(403).json({ error: 'Officer only' });
-  next();
+const router = new Hono();
+router.use('*', requireAuth);
+router.use('*', async (c, next) => {
+  if (!c.get('session').user?.isOfficer) return c.json({ error: 'Officer only' }, 403);
+  await next();
 });
 
-// ── GET /api/roster ────────────────────────────────────────────────────────────
-
-router.get('/', async (req, res) => {
-  const { teamSheetId } = req.session.user;
-  if (!teamSheetId) return res.json([]);
-
+router.get('/', async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  if (!teamSheetId) return c.json([]);
   try {
     const roster = await getRoster(teamSheetId);
-
-    // Active/Bench first, Inactive last; alphabetical within each group
     const sorted = [...roster].sort((a, b) => {
       const ai = a.status === 'Inactive' ? 1 : 0;
       const bi = b.status === 'Inactive' ? 1 : 0;
       if (ai !== bi) return ai - bi;
       return a.charName.localeCompare(b.charName);
     });
-
-    res.json(sorted);
+    return c.json(sorted);
   } catch (err) {
     console.error('[ROSTER] Error:', err);
-    res.status(500).json({ error: 'Failed to load roster' });
+    return c.json({ error: 'Failed to load roster' }, 500);
   }
 });
 
-// ── POST /api/roster ──────────────────────────────────────────────────────────
+router.post('/', async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const { charName, class: cls, spec, status = 'Active' } = await c.req.json();
 
-router.post('/', async (req, res) => {
-  const { teamSheetId } = req.session.user;
-  const { charName, class: cls, spec, status = 'Active' } = req.body;
-
-  if (!charName?.trim()) return res.status(400).json({ error: 'charName is required' });
-  if (!cls?.trim())      return res.status(400).json({ error: 'class is required' });
-  if (!spec?.trim())     return res.status(400).json({ error: 'spec is required' });
-  if (!CLASS_SPECS[cls]?.includes(spec)) {
-    return res.status(400).json({ error: 'Invalid class/spec combination' });
-  }
-  if (!['Active', 'Bench', 'Inactive'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid status' });
-  }
+  if (!charName?.trim()) return c.json({ error: 'charName is required' }, 400);
+  if (!cls?.trim())      return c.json({ error: 'class is required' }, 400);
+  if (!spec?.trim())     return c.json({ error: 'spec is required' }, 400);
+  if (!CLASS_SPECS[cls]?.includes(spec)) return c.json({ error: 'Invalid class/spec combination' }, 400);
+  if (!['Active', 'Bench', 'Inactive'].includes(status)) return c.json({ error: 'Invalid status' }, 400);
 
   try {
     const roster = await getRoster(teamSheetId);
     if (roster.some(r => r.charName === charName.trim())) {
-      return res.status(409).json({ error: 'Character already exists on this roster' });
+      return c.json({ error: 'Character already exists on this roster' }, 409);
     }
-
     const role = specToRole(spec.trim());
     await addRosterChar(teamSheetId, charName.trim(), cls.trim(), spec.trim(), role, status);
-    res.json({ charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: '', ownerNick: '' });
+    return c.json({ charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: '', ownerNick: '' });
   } catch (err) {
     console.error('[ROSTER] Add character error:', err);
-    res.status(500).json({ error: 'Failed to add character' });
+    return c.json({ error: 'Failed to add character' }, 500);
   }
 });
 
-// ── GET /api/roster/:charName ──────────────────────────────────────────────────
+router.get('/owner-nick', async (c) => c.json({ error: 'Use POST' }, 405));
 
-router.get('/:charName', async (req, res) => {
-  const { teamSheetId } = req.session.user;
-  const { charName }    = req.params;
+router.post('/owner-nick', async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const { ownerId, ownerNick } = await c.req.json();
+  if (!ownerId)             return c.json({ error: 'ownerId is required' }, 400);
+  if (!ownerNick?.trim())   return c.json({ error: 'ownerNick is required' }, 400);
+  try {
+    await setOwnerNick(teamSheetId, ownerId, ownerNick.trim());
+    return c.json({ ok: true, ownerId, ownerNick: ownerNick.trim() });
+  } catch (err) {
+    console.error('[ROSTER] Owner nick update error:', err);
+    return c.json({ error: 'Failed to update player name' }, 500);
+  }
+});
 
-  if (!teamSheetId) return res.status(404).json({ error: 'No team' });
-
+router.get('/:charName', async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const charName        = c.req.param('charName');
+  if (!teamSheetId) return c.json({ error: 'No team' }, 404);
   try {
     const [roster, lootLog, bisSubmissions, effectiveBis, itemDb] = await Promise.all([
-      getRoster(teamSheetId),
-      getLootLog(teamSheetId),
-      getBisSubmissions(teamSheetId),
-      getEffectiveDefaultBis(),
-      getItemDb(),
+      getRoster(teamSheetId), getLootLog(teamSheetId), getBisSubmissions(teamSheetId),
+      getEffectiveDefaultBis(), getItemDb(),
     ]);
-
     const rosterChar = roster.find(r => r.charName === charName);
-    if (!rosterChar) return res.status(404).json({ error: 'Character not found' });
+    if (!rosterChar) return c.json({ error: 'Character not found' }, 404);
 
-    // Item name → itemId lookup (case-insensitive)
     const itemIdByName = new Map();
-    for (const item of itemDb) {
-      if (item.name) itemIdByName.set(item.name.toLowerCase(), item.itemId);
-    }
+    for (const item of itemDb) if (item.name) itemIdByName.set(item.name.toLowerCase(), item.itemId);
 
-    // All characters on the same Discord account
     const accountCharNames = rosterChar.ownerId
       ? roster.filter(r => r.ownerId === rosterChar.ownerId).map(r => r.charName)
       : [charName];
 
-    // Loot history for this character, newest first
     const loot = lootLog
       .filter(e => e.recipientChar === charName)
       .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .map(e => ({
-        ...e,
-        itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '',
-      }));
+      .map(e => ({ ...e, itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '' }));
 
-    // Loot history for the whole account (all chars), newest first
     const accountLoot = accountCharNames.length > 1
       ? lootLog
           .filter(e => accountCharNames.includes(e.recipientChar))
           .sort((a, b) => new Date(b.date) - new Date(a.date))
-          .map(e => ({
-            ...e,
-            itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '',
-          }))
+          .map(e => ({ ...e, itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '' }))
       : [];
 
-    // Approved personal BIS submissions
-    const approvedBis = bisSubmissions.filter(
-      s => s.charName === charName && s.status === 'Approved'
-    );
-
-    // Spec defaults (fall back for slots without a personal submission)
+    const approvedBis   = bisSubmissions.filter(s => s.charName === charName && s.status === 'Approved');
     const canonicalSpec = toCanonical(rosterChar.spec);
     const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
     const specDefaults  = applyRaidBisInference(specRows, itemDb);
 
-    res.json({
-      charName:  rosterChar.charName,
-      class:     rosterChar.class,
-      spec:      rosterChar.spec,
-      role:      rosterChar.role,
-      status:    rosterChar.status,
-      ownerNick: rosterChar.ownerNick,
-      bis:          approvedBis,
-      specDefaults,
-      loot,
-      accountChars: accountCharNames,
-      accountLoot,
+    return c.json({
+      charName: rosterChar.charName, class: rosterChar.class, spec: rosterChar.spec,
+      role: rosterChar.role, status: rosterChar.status, ownerNick: rosterChar.ownerNick,
+      bis: approvedBis, specDefaults, loot, accountChars: accountCharNames, accountLoot,
     });
   } catch (err) {
     console.error('[ROSTER] Character detail error:', err);
-    res.status(500).json({ error: 'Failed to load character data' });
+    return c.json({ error: 'Failed to load character data' }, 500);
   }
 });
 
-// ── POST /api/roster/owner-nick ────────────────────────────────────────────────
-
-router.post('/owner-nick', async (req, res) => {
-  const { teamSheetId } = req.session.user;
-  const { ownerId, ownerNick } = req.body;
-
-  if (!ownerId)   return res.status(400).json({ error: 'ownerId is required' });
-  if (!ownerNick?.trim()) return res.status(400).json({ error: 'ownerNick is required' });
-
-  try {
-    await setOwnerNick(teamSheetId, ownerId, ownerNick.trim());
-    res.json({ ok: true, ownerId, ownerNick: ownerNick.trim() });
-  } catch (err) {
-    console.error('[ROSTER] Owner nick update error:', err);
-    res.status(500).json({ error: 'Failed to update player name' });
-  }
-});
-
-// ── POST /api/roster/:charName/owner ──────────────────────────────────────────
-
-router.post('/:charName/owner', async (req, res) => {
-  const { teamSheetId } = req.session.user;
-  const { charName }    = req.params;
-  const { ownerId, ownerNick = '' } = req.body;
-
-  if (!ownerId?.trim()) return res.status(400).json({ error: 'ownerId is required' });
-
+router.post('/:charName/owner', async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const charName        = c.req.param('charName');
+  const { ownerId, ownerNick = '' } = await c.req.json();
+  if (!ownerId?.trim()) return c.json({ error: 'ownerId is required' }, 400);
   try {
     await setRosterOwner(teamSheetId, charName, ownerId.trim(), ownerNick.trim());
-    res.json({ ok: true, charName, ownerId: ownerId.trim(), ownerNick: ownerNick.trim() });
+    return c.json({ ok: true, charName, ownerId: ownerId.trim(), ownerNick: ownerNick.trim() });
   } catch (err) {
     console.error('[ROSTER] Set owner error:', err);
-    res.status(500).json({ error: 'Failed to link Discord account' });
+    return c.json({ error: 'Failed to link Discord account' }, 500);
   }
 });
 
-// ── DELETE /api/roster/:charName/owner ────────────────────────────────────────
-
-router.delete('/:charName/owner', async (req, res) => {
-  const { teamSheetId } = req.session.user;
-  const { charName }    = req.params;
-
+router.delete('/:charName/owner', async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const charName        = c.req.param('charName');
   try {
     await setRosterOwner(teamSheetId, charName, '', '');
-    res.json({ ok: true, charName });
+    return c.json({ ok: true, charName });
   } catch (err) {
     console.error('[ROSTER] Clear owner error:', err);
-    res.status(500).json({ error: 'Failed to clear Discord account' });
+    return c.json({ error: 'Failed to clear Discord account' }, 500);
   }
 });
 
-// ── POST /api/roster/:charName/status ─────────────────────────────────────────
-
-router.post('/:charName/status', async (req, res) => {
-  const { teamSheetId } = req.session.user;
-  const { charName }    = req.params;
-  const { status }      = req.body;
-
-  if (!['Active', 'Inactive'].includes(status)) {
-    return res.status(400).json({ error: 'status must be Active or Inactive' });
-  }
-
+router.post('/:charName/status', async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const charName        = c.req.param('charName');
+  const { status }      = await c.req.json();
+  if (!['Active', 'Inactive'].includes(status)) return c.json({ error: 'status must be Active or Inactive' }, 400);
   try {
     await setRosterStatus(teamSheetId, charName, status);
-    res.json({ ok: true, charName, status });
+    return c.json({ ok: true, charName, status });
   } catch (err) {
     console.error('[ROSTER] Status update error:', err);
-    res.status(500).json({ error: 'Failed to update status' });
+    return c.json({ error: 'Failed to update status' }, 500);
   }
 });
 

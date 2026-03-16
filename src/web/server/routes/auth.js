@@ -3,15 +3,15 @@
  *
  * GET /api/auth/login    → redirect to Discord OAuth consent screen
  * GET /api/auth/callback → exchange code, resolve team + role, set session
- * GET /api/auth/logout   → destroy session and redirect to /login
+ * GET /api/auth/logout   → clear session and redirect to /login
  */
 
-import { Router } from 'express';
+import { Hono } from 'hono';
 import { getAllTeams } from '../../../lib/teams.js';
-import { getRoster, getConfig, getGlobalConfig } from '../../../lib/sheets.js';
+import { getRoster, getGlobalConfig } from '../../../lib/sheets.js';
 
-const router       = Router();
-const DISCORD_API  = 'https://discord.com/api/v10';
+const router      = new Hono();
+const DISCORD_API = 'https://discord.com/api/v10';
 
 function redirectUri() {
   return process.env.DISCORD_REDIRECT_URI ?? 'http://localhost:3000/api/auth/callback';
@@ -19,21 +19,21 @@ function redirectUri() {
 
 // ── Login ──────────────────────────────────────────────────────────────────────
 
-router.get('/login', (_req, res) => {
+router.get('/login', (c) => {
   const params = new URLSearchParams({
     client_id:     process.env.DISCORD_CLIENT_ID,
     redirect_uri:  redirectUri(),
     response_type: 'code',
     scope:         'identify',
   });
-  res.redirect(`${DISCORD_API}/oauth2/authorize?${params}`);
+  return c.redirect(`${DISCORD_API}/oauth2/authorize?${params}`);
 });
 
 // ── Callback ───────────────────────────────────────────────────────────────────
 
-router.get('/callback', async (req, res) => {
-  const { code } = req.query;
-  if (!code) return res.redirect('/login?error=no_code');
+router.get('/callback', async (c) => {
+  const code = c.req.query('code');
+  if (!code) return c.redirect('/login?error=no_code');
 
   try {
     // 1. Exchange code for access token
@@ -59,90 +59,75 @@ router.get('/callback', async (req, res) => {
     const discordUser = await userRes.json();
     console.log(`[AUTH] Discord user: id=${discordUser.id} username=${discordUser.username}`);
 
-    // 3. Resolve team and ALL characters for this Discord user from roster
-    let resolvedTeam  = null;
-    let resolvedChars = [];
+    // 3. Find ALL teams this Discord user belongs to (no early exit)
+    const userTeams = [];
     for (const team of getAllTeams()) {
       const roster = await getRoster(team.sheetId);
-      console.log(`[AUTH] Roster for team ${team.name}: ${roster.map(c => `${c.charName}(${c.ownerId})`).join(', ')}`);
-      const chars  = roster.filter(c => c.ownerId === discordUser.id);
-      if (chars.length) {
-        resolvedTeam  = team;
-        resolvedChars = chars;
-        break;
-      }
+      console.log(`[AUTH] Roster for team ${team.name}: ${roster.map(ch => `${ch.charName}(${ch.ownerId})`).join(', ')}`);
+      const chars = roster.filter(ch => ch.ownerId === discordUser.id);
+      if (chars.length) userTeams.push({ team, chars });
     }
 
-    // Active character defaults to the first one found
-    const activeChar = resolvedChars[0] ?? null;
-
-    // 4. Read guild_id from master sheet Global Config (guild-wide setting)
-    //    Read officer_role_id from the team's own Config tab (team-specific)
-    let globalConfig = {};
-    let teamConfig   = {};
-    try {
-      globalConfig = await getGlobalConfig();
-    } catch (err) {
-      console.warn('[AUTH] Could not read Global Config from master sheet:', err.message);
-    }
-    if (resolvedTeam) {
-      try {
-        teamConfig = await getConfig(resolvedTeam.sheetId);
-      } catch (err) {
-        console.warn(`[AUTH] Could not read Config for team "${resolvedTeam.name}":`, err.message);
-      }
-    }
-
-    // 5. Check officer role via guild member (uses bot token)
-    //    guild_id comes from the master sheet Global Config
+    // 4. Fetch guild roles once — used to check officer status across all teams.
+    //    guild_id comes from the master sheet Global Config.
     let guildRoles = [];
-    const guildId = globalConfig.guild_id || null;
-    if (guildId) {
-      const memberRes = await fetch(`${DISCORD_API}/guilds/${guildId}/members/${discordUser.id}`, {
-        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
-      });
-      if (memberRes.ok) {
-        const member = await memberRes.json();
-        guildRoles = member.roles ?? [];
+    try {
+      const globalConfig = await getGlobalConfig();
+      const guildId      = globalConfig.guild_id || null;
+      if (guildId) {
+        const memberRes = await fetch(`${DISCORD_API}/guilds/${guildId}/members/${discordUser.id}`, {
+          headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
+        });
+        if (memberRes.ok) {
+          const member = await memberRes.json();
+          guildRoles = member.roles ?? [];
+        }
       }
+    } catch (err) {
+      console.warn('[AUTH] Could not fetch guild roles:', err.message);
     }
 
-    // 6. Determine officer status using role ID from the team's Config tab
-    const officerRoleId = teamConfig.officer_role_id || null;
-    const isOfficer     = officerRoleId ? guildRoles.includes(officerRoleId) : false;
+    // 5. Build the teams array with per-team officer status.
+    //    officerRoleId is already loaded into the in-memory team object by initTeams().
+    const teams = userTeams.map(({ team, chars }) => ({
+      teamName:    team.name,
+      teamSheetId: team.sheetId,
+      isOfficer:   team.officerRoleId ? guildRoles.includes(team.officerRoleId) : false,
+      chars:       chars.map(ch => ({ charName: ch.charName, spec: ch.spec, role: ch.role, status: ch.status })),
+    }));
 
-    // 7. Store session — chars holds the full list for the account switcher
-    req.session.user = {
+    // 6. Active team defaults to first match; active character to first char in that team.
+    const activeTeam = teams[0] ?? null;
+    const activeChar = activeTeam?.chars[0] ?? null;
+
+    // 7. Store session
+    c.get('session').user = {
       id:          discordUser.id,
       username:    discordUser.username,
       avatar:      discordUser.avatar,
-      teamName:    resolvedTeam?.name    ?? null,
-      teamSheetId: resolvedTeam?.sheetId ?? null,
-      charName:    activeChar?.charName  ?? null,
-      spec:        activeChar?.spec      ?? null,
-      role:        activeChar?.role      ?? null,
-      status:      activeChar?.status    ?? null,
-      isOfficer,
-      // Full list so the UI can render the character switcher
-      chars: resolvedChars.map(c => ({
-        charName: c.charName,
-        spec:     c.spec,
-        role:     c.role,
-        status:   c.status,
-      })),
+      teamName:    activeTeam?.teamName    ?? null,
+      teamSheetId: activeTeam?.teamSheetId ?? null,
+      charName:    activeChar?.charName    ?? null,
+      spec:        activeChar?.spec        ?? null,
+      role:        activeChar?.role        ?? null,
+      status:      activeChar?.status      ?? null,
+      isOfficer:   activeTeam?.isOfficer   ?? false,
+      chars:       activeTeam?.chars       ?? [],
+      teams,
     };
 
-    res.redirect('/');
+    return c.redirect('/');
   } catch (err) {
     console.error('[AUTH] OAuth error:', err);
-    res.redirect('/login?error=auth_failed');
+    return c.redirect('/login?error=auth_failed');
   }
 });
 
 // ── Logout ─────────────────────────────────────────────────────────────────────
 
-router.get('/logout', (req, res) => {
-  req.session.destroy(() => res.redirect('/login'));
+router.get('/logout', (c) => {
+  c.get('session').destroy();
+  return c.redirect('/login');
 });
 
 export default router;
