@@ -13,6 +13,10 @@ import { getRoster, getGlobalConfig } from '../../../lib/sheets.js';
 const router      = new Hono();
 const DISCORD_API = 'https://discord.com/api/v10';
 
+// Base path for server-side redirects — must match APP_BASE_PATH in index.js.
+// E.g. '/loot' in production, '' locally.
+const BASE = (process.env.APP_BASE_PATH ?? '/loot').replace(/\/$/, '');
+
 function redirectUri() {
   return process.env.DISCORD_REDIRECT_URI ?? 'http://localhost:3000/api/auth/callback';
 }
@@ -33,7 +37,7 @@ router.get('/login', (c) => {
 
 router.get('/callback', async (c) => {
   const code = c.req.query('code');
-  if (!code) return c.redirect('/login?error=no_code');
+  if (!code) return c.redirect(`${BASE}/login?error=no_code`);
 
   try {
     // 1. Exchange code for access token
@@ -119,10 +123,10 @@ router.get('/callback', async (c) => {
       teams,
     };
 
-    return c.redirect('/');
+    return c.redirect(`${BASE}/`);
   } catch (err) {
     console.error('[AUTH] OAuth error:', err);
-    return c.redirect('/login?error=auth_failed');
+    return c.redirect(`${BASE}/login?error=auth_failed`);
   }
 });
 
@@ -130,7 +134,7 @@ router.get('/callback', async (c) => {
 
 router.get('/logout', (c) => {
   c.get('session').destroy();
-  return c.redirect('/login');
+  return c.redirect(`${BASE}/login`);
 });
 
 export default router;

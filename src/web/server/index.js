@@ -20,7 +20,16 @@ import councilRouter   from './routes/council.js';
 import lootRouter      from './routes/loot.js';
 import rosterRouter    from './routes/roster.js';
 
-const app = new Hono();
+// ── Base path ──────────────────────────────────────────────────────────────────
+// APP_BASE_PATH controls the URL prefix the app is mounted under.
+//   Production / wrangler dev: APP_BASE_PATH=/loot  → routes match /loot/api/...
+//   Local Node dev (.env):     APP_BASE_PATH=        → routes match /api/...
+//
+// Set APP_BASE_PATH= (empty) in your local .env to use the Vite dev server
+// proxy without the /loot prefix.
+
+const BASE_PATH = process.env.APP_BASE_PATH ?? '/loot';
+const app = BASE_PATH ? new Hono().basePath(BASE_PATH) : new Hono();
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 
@@ -56,24 +65,21 @@ app.route('/api/loot',      lootRouter);
 app.route('/api/roster',    rosterRouter);
 
 // ── SPA fallback ────────────────────────────────────────────────────────────
-// For any non-API route (e.g. /login, /bis, /council), serve index.html and
-// let React Router handle client-side routing.
+// For any non-API route (e.g. /login, /bis, /council), serve the React app.
+// basePath() strips the /loot prefix so c.req.path is the bare asset path
+// (e.g. '/assets/index.js', '/index.html') — we can pass it straight to ASSETS.
 app.get('/*', async (c) => {
-  const url = new URL(c.req.url);
-  // Strip the /loot prefix before looking up in ASSETS
-  url.pathname = url.pathname.replace(/^\/loot/, '') || '/';
-  if (!url.pathname.startsWith('/')) url.pathname = '/' + url.pathname;
-  
-  const res = await c.env.ASSETS.fetch(new Request(url.toString()));
+  if (!c.env?.ASSETS) return c.notFound(); // Node dev — no ASSETS binding
+
+  const origin = new URL(c.req.url).origin;
+  const path   = c.req.path; // basePath already stripped the /loot prefix
+
+  // Try the exact static file first (assets, index.html, etc.)
+  const res = await c.env.ASSETS.fetch(new Request(`${origin}${path}`));
   if (res.ok) return res;
-  
-  // SPA fallback
-  url.pathname = '/index.html';
-  const indexRes = await c.env.ASSETS.fetch(new Request(url.toString()));
-  const newRes = new Response(indexRes.body, indexRes);
-  newRes.headers.delete('Content-Encoding');
-  newRes.headers.delete('Content-Length');
-  return newRes;
+
+  // SPA fallback — serve index.html and let React Router handle the route
+  return c.env.ASSETS.fetch(new Request(`${origin}/index.html`));
 });
 
 console.log('[WEB] Worker ready');

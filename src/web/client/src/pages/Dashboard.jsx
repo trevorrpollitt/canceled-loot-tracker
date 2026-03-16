@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useMe, refreshMe } from '../hooks/useMe.js';
 import ItemLink from '../components/ItemLink.jsx';
+import { apiPath } from '../lib/api.js';
 
 const ALL_SLOTS = [
   'Head', 'Neck', 'Shoulders', 'Back', 'Chest', 'Wrists',
@@ -171,7 +172,7 @@ export default function Dashboard() {
   const loadDashboard = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch('/api/dashboard', { credentials: 'include' })
+    fetch(apiPath('/api/dashboard'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { setData(d); setLoading(false); })
       .catch(e => { setError(e); setLoading(false); });
@@ -188,7 +189,7 @@ export default function Dashboard() {
     if (charName === user?.charName) return;
     setSwitching(true);
     try {
-      const res = await fetch('/api/me/active-char', {
+      const res = await fetch(apiPath('/api/me/active-char'), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },

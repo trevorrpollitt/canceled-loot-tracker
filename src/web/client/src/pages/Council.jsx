@@ -7,6 +7,7 @@
  *   Candidate table (shown when item selected) + Raid BIS / All toggle
  */
 
+import { apiPath } from '../lib/api.js';
 import { useState, useEffect, useCallback } from 'react';
 
 // ── Item meta label ───────────────────────────────────────────────────────────
@@ -82,7 +83,7 @@ function CurioCandidateTable({ curioItemId }) {
 
   useEffect(() => {
     setLoading(true);
-    fetch('/api/council/curio-candidates', { credentials: 'include' })
+    fetch(apiPath('/api/council/curio-candidates'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { setData(d); setLoading(false); })
       .catch(() => { setError('Failed to load curio candidates.'); setLoading(false); });
@@ -321,7 +322,7 @@ export default function Council() {
   const [showCurio,        setShowCurio]        = useState(false);
 
   useEffect(() => {
-    fetch('/api/council/items', { credentials: 'include' })
+    fetch(apiPath('/api/council/items'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => {
         setInstances(d.instances);

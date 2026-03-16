@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { apiPath } from '../lib/api.js';
 
 let cache     = null; // module-level cache so multiple consumers don't re-fetch
 let listeners = [];   // callbacks registered by mounted useMe() consumers
@@ -20,7 +21,7 @@ export function useMe() {
 
   useEffect(() => {
     if (cache !== null) return;
-    fetch('/api/me', { credentials: 'include' })
+    fetch(apiPath('/api/me'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         notify(data);
@@ -46,7 +47,7 @@ export function clearMeCache() {
 export async function refreshMe() {
   cache = null;
   try {
-    const res  = await fetch('/api/me', { credentials: 'include' });
+    const res  = await fetch(apiPath('/api/me'), { credentials: 'include' });
     const data = res.ok ? await res.json() : null;
     notify(data);
     return data;
