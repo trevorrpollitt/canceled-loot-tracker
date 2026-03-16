@@ -17,6 +17,11 @@ not_found_handling = "single-page-application"
 command = "npm run build"
 watch_dir = ["src/web/client/src", "src/web/server"]
 
+[observability]
+[observability.logs]
+enabled = false
+invocation_logs = true
+
 [vars]
 # Discord vars
 DISCORD_CLIENT_ID = "1481498623416991796"
