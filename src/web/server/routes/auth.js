@@ -69,11 +69,13 @@ router.get('/callback', async (c) => {
     }
 
     // 4. Fetch guild roles once — used to check officer status across all teams.
-    //    guild_id comes from the master sheet Global Config.
-    let guildRoles = [];
+    //    guild_id and global_officer_role_id come from the master sheet Global Config.
+    let guildRoles        = [];
+    let globalOfficerRole = null;
     try {
       const globalConfig = await getGlobalConfig();
       const guildId      = globalConfig.guild_id || null;
+      globalOfficerRole  = globalConfig.global_officer_role_id || null;
       if (guildId) {
         const memberRes = await fetch(`${DISCORD_API}/guilds/${guildId}/members/${discordUser.id}`, {
           headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
@@ -111,8 +113,9 @@ router.get('/callback', async (c) => {
       spec:        activeChar?.spec        ?? null,
       role:        activeChar?.role        ?? null,
       status:      activeChar?.status      ?? null,
-      isOfficer:   activeTeam?.isOfficer   ?? false,
-      chars:       activeTeam?.chars       ?? [],
+      isOfficer:       activeTeam?.isOfficer ?? false,
+      isGlobalOfficer: globalOfficerRole ? guildRoles.includes(globalOfficerRole) : false,
+      chars:           activeTeam?.chars    ?? [],
       teams,
     };
 

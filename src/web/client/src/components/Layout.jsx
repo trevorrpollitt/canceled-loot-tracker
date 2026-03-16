@@ -20,11 +20,8 @@ export default function Layout({ children }) {
     <div className="layout">
       <nav className="nav">
         <div className="nav-left">
-          <NavLink to="/" className="nav-brand">❌ Canceled</NavLink>
-          <NavLink to="/bis" className="nav-link">My BIS</NavLink>
-          {user?.isOfficer && (
-            <NavLink to="/admin/default-bis" className="nav-link">Raid BIS</NavLink>
-          )}
+          <NavLink to="/" className="nav-brand">Home</NavLink>
+          <NavLink to="/bis" className="nav-link">Edit BIS</NavLink>
           {user?.isOfficer && (
             <NavLink to="/bis/review" className="nav-link">BIS Review</NavLink>
           )}
@@ -36,6 +33,9 @@ export default function Layout({ children }) {
           )}
           {user?.isOfficer && (
             <NavLink to="/loot/import" className="nav-link">Loot Import</NavLink>
+          )}
+          {user?.isGlobalOfficer && (
+            <NavLink to="/admin/default-bis" className="nav-link">Raid BIS</NavLink>
           )}
         </div>
         <div className="nav-right">

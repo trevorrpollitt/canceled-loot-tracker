@@ -25,6 +25,14 @@ function OfficerRoute({ children }) {
   return children;
 }
 
+function GlobalOfficerRoute({ children }) {
+  const { user, loading } = useMe();
+  if (loading)                  return <div className="loading">Loading…</div>;
+  if (!user)                    return <Navigate to="/login" replace />;
+  if (!user.isGlobalOfficer)    return <Navigate to="/" replace />;
+  return children;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -40,9 +48,9 @@ export default function App() {
         </ProtectedRoute>
       } />
       <Route path="/admin/default-bis" element={
-        <OfficerRoute>
+        <GlobalOfficerRoute>
           <Layout><AdminDefaultBis /></Layout>
-        </OfficerRoute>
+        </GlobalOfficerRoute>
       } />
       <Route path="/bis/review" element={
         <OfficerRoute>

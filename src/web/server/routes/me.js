@@ -25,10 +25,10 @@ router.get('/', (c) => {
 
   const {
     id, username, avatar,
-    teamName, charName, spec, role, status, isOfficer,
+    teamName, charName, spec, role, status, isOfficer, isGlobalOfficer,
     chars, teams,
   } = session.user;
-  return c.json({ id, username, avatar, teamName, charName, spec, role, status, isOfficer, chars: chars ?? [], teams: teams ?? [] });
+  return c.json({ id, username, avatar, teamName, charName, spec, role, status, isOfficer, isGlobalOfficer: isGlobalOfficer ?? false, chars: chars ?? [], teams: teams ?? [] });
 });
 
 router.post('/active-char', requireAuth, async (c) => {

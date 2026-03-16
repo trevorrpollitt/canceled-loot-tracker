@@ -52,14 +52,21 @@ function itemOptionsForSlot(itemDb, slot, armorType, canonSpec = '') {
 const router = new Hono();
 
 router.use('*', requireAuth);
-router.use('*', async (c, next) => {
+
+// Routes that edit guild-wide Default BIS (master sheet) require global officer role.
+// All other admin routes require only the per-team officer role.
+const requireGlobalOfficer = async (c, next) => {
+  if (!c.get('session').user?.isGlobalOfficer) return c.json({ error: 'Global officers only' }, 403);
+  await next();
+};
+const requireOfficer = async (c, next) => {
   if (!c.get('session').user?.isOfficer) return c.json({ error: 'Officers only' }, 403);
   await next();
-});
+};
 
 // ── GET /api/admin/default-bis ─────────────────────────────────────────────────
 
-router.get('/default-bis', async (c) => {
+router.get('/default-bis', requireGlobalOfficer, async (c) => {
   const spec            = c.req.query('spec');
   const requestedSource = c.req.query('source');
   if (!spec) return c.json({ error: 'spec is required' }, 400);
@@ -102,7 +109,7 @@ router.get('/default-bis', async (c) => {
 
 // ── POST /api/admin/default-bis ────────────────────────────────────────────────
 
-router.post('/default-bis', async (c) => {
+router.post('/default-bis', requireGlobalOfficer, async (c) => {
   const { spec, source, updates } = await c.req.json();
   if (!spec || !source || !Array.isArray(updates)) {
     return c.json({ error: 'spec, source, and updates[] are required' }, 400);
@@ -125,7 +132,7 @@ router.post('/default-bis', async (c) => {
 
 // ── POST /api/admin/spec-bis-source ────────────────────────────────────────────
 
-router.post('/spec-bis-source', async (c) => {
+router.post('/spec-bis-source', requireGlobalOfficer, async (c) => {
   const { spec, source } = await c.req.json();
   if (!spec || !source) return c.json({ error: 'spec and source are required' }, 400);
   const { teamSheetId } = c.get('session').user;
@@ -142,11 +149,11 @@ router.post('/spec-bis-source', async (c) => {
 
 // ── GET /api/admin/specs ───────────────────────────────────────────────────────
 
-router.get('/specs', (c) => c.json(CLASS_SPECS));
+router.get('/specs', requireGlobalOfficer, (c) => c.json(CLASS_SPECS));
 
 // ── GET /api/admin/bis-review ──────────────────────────────────────────────────
 
-router.get('/bis-review', async (c) => {
+router.get('/bis-review', requireOfficer, async (c) => {
   const { teamSheetId } = c.get('session').user;
   if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
   try {
@@ -214,7 +221,7 @@ router.get('/bis-review', async (c) => {
 
 // ── POST /api/admin/bis-review/approve ─────────────────────────────────────────
 
-router.post('/bis-review/approve', async (c) => {
+router.post('/bis-review/approve', requireOfficer, async (c) => {
   const { id } = await c.req.json();
   if (!id) return c.json({ error: 'id is required' }, 400);
   const { teamSheetId, charName: officerChar, username } = c.get('session').user;
@@ -230,7 +237,7 @@ router.post('/bis-review/approve', async (c) => {
 
 // ── POST /api/admin/bis-review/reject ──────────────────────────────────────────
 
-router.post('/bis-review/reject', async (c) => {
+router.post('/bis-review/reject', requireOfficer, async (c) => {
   const { id, officerNote = '' } = await c.req.json();
   if (!id) return c.json({ error: 'id is required' }, 400);
   const { teamSheetId, charName: officerChar, username } = c.get('session').user;
