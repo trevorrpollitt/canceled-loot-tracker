@@ -11,3 +11,6 @@ zone_name = "canceledwow.com"
 [assets]
 directory = "./src/web/dist"
 binding = "ASSETS"
+
+[build]
+command = "npm run build" # Wrangler will run this at the root
