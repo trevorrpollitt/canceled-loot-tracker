@@ -66,13 +66,14 @@ app.route('/api/roster',    rosterRouter);
 
 // ── SPA fallback ────────────────────────────────────────────────────────────
 // For any non-API route (e.g. /login, /bis, /council), serve the React app.
-// basePath() strips the /loot prefix so c.req.path is the bare asset path
-// (e.g. '/assets/index.js', '/index.html') — we can pass it straight to ASSETS.
+// c.req.path returns the full URL path, so we strip BASE_PATH manually before
+// looking up files in the ASSETS binding (which maps to dist/ with no prefix).
 app.get('/*', async (c) => {
   if (!c.env?.ASSETS) return c.notFound(); // Node dev — no ASSETS binding
 
-  const origin = new URL(c.req.url).origin;
-  const path   = c.req.path; // basePath already stripped the /loot prefix
+  const origin  = new URL(c.req.url).origin;
+  const rawPath = c.req.path;
+  const path    = BASE_PATH ? rawPath.slice(BASE_PATH.length) || '/' : rawPath;
 
   // Try the exact static file first (assets, index.html, etc.)
   const res = await c.env.ASSETS.fetch(new Request(`${origin}${path}`));
