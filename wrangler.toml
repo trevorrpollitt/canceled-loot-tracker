@@ -7,3 +7,7 @@ compatibility_flags = [ "nodejs_compat" ]
 [[routes]]
 pattern = "www.canceledwow.com/loot*"
 zone_name = "canceledwow.com"
+
+[assets]
+directory = "./src/web/dist"
+binding = "ASSETS"
