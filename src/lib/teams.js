@@ -11,6 +11,7 @@
  */
 
 import { getTeamRegistry, getConfig } from './sheets.js';
+import { log } from './logger.js';
 
 // In-memory team registry — populated by initTeams() at startup.
 const TEAMS = {};
@@ -33,6 +34,7 @@ const TEAMS = {};
  * and is read directly by auth.js via getGlobalConfig().
  */
 export async function initTeams() {
+  log.verbose('[teams] initTeams — loading team registry');
   // Clear any previous state (safe for hot-reload scenarios)
   for (const key of Object.keys(TEAMS)) delete TEAMS[key];
 
@@ -40,14 +42,16 @@ export async function initTeams() {
   try {
     registry = await getTeamRegistry();
   } catch (err) {
-    console.error('[teams] Failed to load team registry from master sheet:', err.message);
+    log.error('[teams] Failed to load team registry from master sheet:', err.message);
     return;
   }
 
   if (!registry.length) {
-    console.warn('[teams] Team registry is empty — add rows to the Teams tab in the master sheet');
+    log.warn('[teams] Team registry is empty — add rows to the Teams tab in the master sheet');
     return;
   }
+
+  log.verbose(`[teams] Found ${registry.length} team(s) in registry:`, registry.map(t => t.name).join(', '));
 
   for (const { name, sheetId } of registry) {
     TEAMS[name.toLowerCase()] = {
@@ -68,11 +72,13 @@ export async function initTeams() {
       team.briefChannelId   = config.brief_channel_id   || null;
       team.officerRoleId    = config.officer_role_id     || null;
       team.memberRoleId     = config.team_role_id        || null;
-      console.log(`[teams] Loaded config for team "${team.name}" from sheet`);
+      log.verbose(`[teams] Loaded config for team "${team.name}" — officerRole=${team.officerRoleId} memberRole=${team.memberRoleId}`);
+      log.debug(`[teams] Full config for team "${team.name}"`, config);
     } catch (err) {
-      console.error(`[teams] Failed to load config for team "${team.name}":`, err.message);
+      log.error(`[teams] Failed to load config for team "${team.name}":`, err.message);
     }
   }
+  log.verbose('[teams] initTeams complete');
 }
 
 // ── Lookup helpers ────────────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ DISCORD_REDIRECT_URI = "https://canceledwow.com/loot/api/auth/callback"
 
 # Web app
 APP_BASE_PATH = "/loot"
+LOG_LEVEL = "off"   # off | verbose | debug
 
 # Blizzard API
 BLIZZARD_CLIENT_ID = "cec2990ff08043058a1c11a3c417d4bc"

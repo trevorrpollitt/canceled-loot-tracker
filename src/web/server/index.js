@@ -10,6 +10,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { initTeams } from '../../lib/teams.js';
 import { sessionMiddleware } from './session.js';
+import { log } from '../../lib/logger.js';
 
 import authRouter      from './routes/auth.js';
 import meRouter        from './routes/me.js';
@@ -47,9 +48,13 @@ app.use('*', sessionMiddleware());
 
 let _teamsReady = null;
 
-app.use('*', async (_c, next) => {
-  if (!_teamsReady) _teamsReady = initTeams();
+app.use('*', async (c, next) => {
+  if (!_teamsReady) {
+    log.verbose('[web] First request — initialising teams');
+    _teamsReady = initTeams();
+  }
   await _teamsReady;
+  log.verbose(`[web] ${c.req.method} ${c.req.path}`);
   await next();
 });
 
@@ -83,6 +88,6 @@ app.get('/*', async (c) => {
   return c.env.ASSETS.fetch(new Request(`${origin}/index.html`));
 });
 
-console.log('[WEB] Worker ready');
+log.verbose(`[web] Worker ready — BASE_PATH="${BASE_PATH}" LOG_LEVEL="${process.env.LOG_LEVEL ?? 'off'}"`);
 
 export default app;
