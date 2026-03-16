@@ -27,12 +27,12 @@ invocation_logs = true
 [vars]
 # Discord vars
 DISCORD_CLIENT_ID = "1481498623416991796"
-DISCORD_GUILD_ID = "901859792602140683"
+DISCORD_GUILD_ID = "1282068816116977695"
 DISCORD_REDIRECT_URI = "https://canceledwow.com/loot/api/auth/callback"
 
 # Web app
 APP_BASE_PATH = "/loot"
-LOG_LEVEL = "verbose"   # off | verbose | debug
+LOG_LEVEL = "off"   # off | verbose | debug
 
 # Blizzard API
 BLIZZARD_CLIENT_ID = "cec2990ff08043058a1c11a3c417d4bc"
