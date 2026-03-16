@@ -9,6 +9,7 @@
  * lists, and set one as the preferred default for the spec.
  */
 
+import { apiPath } from '../lib/api.js';
 import { useState, useEffect, useCallback } from 'react';
 import ItemLink   from '../components/ItemLink.jsx';
 import ItemSelect from '../components/ItemSelect.jsx';
@@ -35,7 +36,7 @@ export default function AdminDefaultBis() {
 
   // Load spec list once
   useEffect(() => {
-    fetch('/api/admin/specs', { credentials: 'include' })
+    fetch(apiPath('/api/admin/specs'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(setClassSpecs)
       .catch(() => setError('Failed to load spec list'));
@@ -52,7 +53,7 @@ export default function AdminDefaultBis() {
       const params = new URLSearchParams({ spec });
       if (source) params.set('source', source);
       const res = await fetch(
-        `/api/admin/default-bis?${params}`,
+        apiPath(`/api/admin/default-bis?${params}`),
         { credentials: 'include' }
       );
       if (!res.ok) throw new Error(res.status);
@@ -87,7 +88,7 @@ export default function AdminDefaultBis() {
     setSavingSource(true);
     setSaveMsg(null);
     try {
-      const res = await fetch('/api/admin/spec-bis-source', {
+      const res = await fetch(apiPath('/api/admin/spec-bis-source'), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
@@ -120,7 +121,7 @@ export default function AdminDefaultBis() {
     setSaving(true);
     setSaveMsg(null);
     try {
-      const res = await fetch('/api/admin/default-bis', {
+      const res = await fetch(apiPath('/api/admin/default-bis'), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },

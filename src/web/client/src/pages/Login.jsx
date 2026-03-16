@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMe } from '../hooks/useMe.js';
+import { apiPath } from '../lib/api.js';
 
 export default function Login() {
   const { user, loading } = useMe();
@@ -23,7 +24,7 @@ export default function Login() {
             {error === 'auth_failed' ? 'Authentication failed. Please try again.' : 'Something went wrong.'}
           </p>
         )}
-        <a className="btn-discord" href="/api/auth/login">
+        <a className="btn-discord" href={apiPath('/api/auth/login')}>
           Login with Discord
         </a>
       </div>

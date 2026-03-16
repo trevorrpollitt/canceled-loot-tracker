@@ -1,12 +1,13 @@
 import { NavLink } from 'react-router-dom';
 import { useMe, refreshMe } from '../hooks/useMe.js';
+import { apiPath } from '../lib/api.js';
 
 export default function Layout({ children }) {
   const { user } = useMe();
   const label = user?.charName ?? user?.username ?? '';
 
   async function switchTeam(teamName) {
-    await fetch('/api/me/active-team', {
+    await fetch(apiPath('/api/me/active-team'), {
       method:      'POST',
       credentials: 'include',
       headers:     { 'Content-Type': 'application/json' },
@@ -32,7 +33,7 @@ export default function Layout({ children }) {
             <NavLink to="/roster" className="nav-link">Roster</NavLink>
           )}
           {user?.isOfficer && (
-            <NavLink to="/loot/import" className="nav-link">Loot Import</NavLink>
+            <NavLink to="/import" className="nav-link">Loot Import</NavLink>
           )}
           {user?.isGlobalOfficer && (
             <NavLink to="/admin/default-bis" className="nav-link">Raid BIS</NavLink>
@@ -40,7 +41,7 @@ export default function Layout({ children }) {
         </div>
         <div className="nav-right">
           {label && <span className="nav-user">{label}</span>}
-          <a className="nav-logout" href="/api/auth/logout">Logout</a>
+          <a className="nav-logout" href={apiPath('/api/auth/logout')}>Logout</a>
         </div>
       </nav>
 

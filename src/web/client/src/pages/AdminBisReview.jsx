@@ -11,6 +11,7 @@
  * After approve/reject the card is removed optimistically.
  */
 
+import { apiPath } from '../lib/api.js';
 import { useState, useEffect, useCallback } from 'react';
 
 const SENTINELS = new Set(['<Tier>', '<Catalyst>', '<Crafted>']);
@@ -265,7 +266,7 @@ export default function AdminBisReview() {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch('/api/admin/bis-review', { credentials: 'include' })
+    fetch(apiPath('/api/admin/bis-review'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { setGroups(d.groups); setPending(d.pending); setLoading(false); })
       .catch(() => { setError('Failed to load BIS review queue.'); setLoading(false); });
@@ -289,7 +290,7 @@ export default function AdminBisReview() {
   };
 
   const handleApprove = async (id) => {
-    const res = await fetch('/api/admin/bis-review/approve', {
+    const res = await fetch(apiPath('/api/admin/bis-review/approve'), {
       method:      'POST',
       credentials: 'include',
       headers:     { 'Content-Type': 'application/json' },
@@ -300,7 +301,7 @@ export default function AdminBisReview() {
   };
 
   const handleReject = async (id, officerNote) => {
-    const res = await fetch('/api/admin/bis-review/reject', {
+    const res = await fetch(apiPath('/api/admin/bis-review/reject'), {
       method:      'POST',
       credentials: 'include',
       headers:     { 'Content-Type': 'application/json' },

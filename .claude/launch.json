@@ -2,21 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "Discord Bot",
-      "runtimeExecutable": "node.exe",
-      "runtimeArgs": ["--watch", "src/index.js"],
-      "port": 0
-    },
-    {
-      "name": "Web Server",
-      "runtimeExecutable": "node.exe",
-      "runtimeArgs": ["--watch", "--env-file=.env", "src/web/server/node.js"],
-      "port": 3001
-    },
-    {
-      "name": "Vite Client",
-      "runtimeExecutable": "node.exe",
-      "runtimeArgs": ["src/web/node_modules/vite/bin/vite.js", "src/web/client", "--config", "src/web/vite.config.js"],
+      "name": "Wrangler Dev",
+      "runtimeExecutable": "cmd.exe",
+      "runtimeArgs": ["/c", "node_modules\\.bin\\wrangler.cmd", "dev", "--port", "3000"],
       "port": 3000
     }
   ]

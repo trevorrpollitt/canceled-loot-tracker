@@ -22,6 +22,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useMe } from '../hooks/useMe.js';
 import ItemSelect from '../components/ItemSelect.jsx';
+import { apiPath } from '../lib/api.js';
 
 const SENTINELS = new Set(['<Tier>', '<Catalyst>', '<Crafted>']);
 
@@ -313,7 +314,7 @@ export default function Bis() {
     setLoading(true);
     setError(null);
     setSaveMsg(null);
-    fetch('/api/bis', { credentials: 'include' })
+    fetch(apiPath('/api/bis'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(data => {
         setSlots(data.slots ?? []);
@@ -381,7 +382,7 @@ export default function Bis() {
     setSaving(true);
     setSaveMsg(null);
     try {
-      const res = await fetch('/api/bis', {
+      const res = await fetch(apiPath('/api/bis'), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
@@ -404,7 +405,7 @@ export default function Bis() {
   // ── Single-slot immediate actions (acknowledge / resubmit) ─────────────────
 
   const handleAcknowledge = useCallback(async (slot) => {
-    const res = await fetch('/api/bis', {
+    const res = await fetch(apiPath('/api/bis'), {
       method:      'POST',
       credentials: 'include',
       headers:     { 'Content-Type': 'application/json' },
@@ -419,7 +420,7 @@ export default function Bis() {
     const sub      = slotData?.submission;
     if (!sub?.trueBis) throw new Error('No submission data');
 
-    const res = await fetch('/api/bis', {
+    const res = await fetch(apiPath('/api/bis'), {
       method:      'POST',
       credentials: 'include',
       headers:     { 'Content-Type': 'application/json' },

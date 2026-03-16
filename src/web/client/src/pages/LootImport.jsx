@@ -1,3 +1,4 @@
+import { apiPath } from '../lib/api.js';
 import { useState, useRef } from 'react';
 
 export default function LootImport() {
@@ -24,7 +25,7 @@ export default function LootImport() {
 
     try {
       const csvText = await file.text();
-      const res = await fetch('/api/loot/import', {
+      const res = await fetch(apiPath('/api/loot/import'), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },

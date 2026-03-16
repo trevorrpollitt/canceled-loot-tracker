@@ -1,3 +1,4 @@
+import { apiPath } from '../lib/api.js';
 import { useState, useEffect } from 'react';
 import ItemLink from '../components/ItemLink.jsx';
 
@@ -256,7 +257,7 @@ function CharacterDetail({ charName, onClose }) {
     setLoading(true);
     setError(null);
     setData(null);
-    fetch(`/api/roster/${encodeURIComponent(charName)}`, { credentials: 'include' })
+    fetch(apiPath(`/api/roster/${encodeURIComponent(charName)}`), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { setData(d); setLoading(false); })
       .catch(() => { setError(true); setLoading(false); });
@@ -336,7 +337,7 @@ function AddCharForm({ onSave, onCancel }) {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch('/api/roster', {
+      const res = await fetch(apiPath('/api/roster'), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
@@ -405,7 +406,7 @@ export default function RosterPage() {
   const [linkOwnerNickValue, setLinkOwnerNickValue] = useState('');
 
   useEffect(() => {
-    fetch('/api/roster', { credentials: 'include' })
+    fetch(apiPath('/api/roster'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { setRoster(d); setLoading(false); })
       .catch(() => { setError(true); setLoading(false); });
@@ -443,7 +444,7 @@ export default function RosterPage() {
     ));
 
     try {
-      const res = await fetch('/api/roster/owner-nick', {
+      const res = await fetch(apiPath('/api/roster/owner-nick'), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
@@ -471,7 +472,7 @@ export default function RosterPage() {
     ));
 
     try {
-      const res = await fetch(`/api/roster/${encodeURIComponent(charName)}/owner`, {
+      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(charName)}/owner`), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
@@ -496,7 +497,7 @@ export default function RosterPage() {
     ));
 
     try {
-      const res = await fetch(`/api/roster/${encodeURIComponent(char.charName)}/owner`, {
+      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(char.charName)}/owner`), {
         method: 'DELETE', credentials: 'include',
       });
       if (!res.ok) throw new Error(res.status);
@@ -527,7 +528,7 @@ export default function RosterPage() {
     ));
 
     try {
-      const res = await fetch(`/api/roster/${encodeURIComponent(char.charName)}/status`, {
+      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(char.charName)}/status`), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
