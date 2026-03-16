@@ -9,7 +9,7 @@ pattern = "canceledwow.com/loot*"
 zone_name = "canceledwow.com"
 
 [assets]
-directory = "./src/web/dist"
+directory = "./src/web/client/dist"
 binding = "ASSETS"
 
 [build]
