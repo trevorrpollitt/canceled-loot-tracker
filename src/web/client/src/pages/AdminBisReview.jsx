@@ -137,8 +137,16 @@ function SubmissionCard({ sub, onApprove, onReject }) {
 
         {/* Arrow row */}
         <div className="review-arrow-row" />
-        <div className="review-arrow-cell">{trueBisChanged ? '↓' : '='}</div>
-        <div className="review-arrow-cell">{raidBisChanged ? '↓' : '='}</div>
+        <div className="review-arrow-cell">
+          {trueBisChanged
+            ? <span className="review-arrow-changed">⬇</span>
+            : <span className="review-arrow-same">—</span>}
+        </div>
+        <div className="review-arrow-cell">
+          {raidBisChanged
+            ? <span className="review-arrow-changed">⬇</span>
+            : <span className="review-arrow-same">—</span>}
+        </div>
 
         {/* Requested row */}
         <div className="review-row-label review-row-label-request">Requested</div>

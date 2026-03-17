@@ -21,10 +21,20 @@ import { toCanonical, CLASS_SPECS } from '../../../lib/specs.js';
 
 const TANK_SPECS   = new Set(['Blood DK', 'Vengeance DH', 'Guardian Druid', 'Brewmaster Monk', 'Prot Paladin', 'Prot Warrior']);
 const HEALER_SPECS = new Set(['Resto Druid', 'Preservation Evoker', 'Mistweaver Monk', 'Holy Paladin', 'Disc Priest', 'Holy Priest', 'Resto Shaman']);
+const RANGED_SPECS = new Set([
+  'Balance Druid', 'Devastation Evoker', 'Augmentation Evoker',
+  'Devourer DH',
+  'BM Hunter', 'MM Hunter',
+  'Arcane Mage', 'Fire Mage', 'Frost Mage',
+  'Shadow Priest',
+  'Ele Shaman',
+  'Affliction Lock', 'Demo Lock', 'Destro Lock',
+]);
 function specToRole(spec) {
   if (TANK_SPECS.has(spec))   return 'Tank';
   if (HEALER_SPECS.has(spec)) return 'Healer';
-  return 'DPS';
+  if (RANGED_SPECS.has(spec)) return 'Ranged DPS';
+  return 'Melee DPS';
 }
 
 const router = new Hono();
@@ -54,7 +64,7 @@ router.get('/', async (c) => {
 
 router.post('/', async (c) => {
   const { teamSheetId } = c.get('session').user;
-  const { charName, class: cls, spec, status = 'Active' } = await c.req.json();
+  const { charName, class: cls, spec, status = 'Active', ownerId = '', ownerNick = '' } = await c.req.json();
 
   if (!charName?.trim()) return c.json({ error: 'charName is required' }, 400);
   if (!cls?.trim())      return c.json({ error: 'class is required' }, 400);
@@ -67,9 +77,14 @@ router.post('/', async (c) => {
     if (roster.some(r => r.charName === charName.trim())) {
       return c.json({ error: 'Character already exists on this roster' }, 409);
     }
-    const role = specToRole(spec.trim());
+    const role            = specToRole(spec.trim());
+    const resolvedOwnerId = ownerId.trim();
+    const resolvedNick    = ownerNick.trim();
     await addRosterChar(teamSheetId, charName.trim(), cls.trim(), spec.trim(), role, status);
-    return c.json({ charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: '', ownerNick: '' });
+    if (resolvedOwnerId) {
+      await setRosterOwner(teamSheetId, charName.trim(), resolvedOwnerId, resolvedNick);
+    }
+    return c.json({ charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: resolvedOwnerId, ownerNick: resolvedNick });
   } catch (err) {
     console.error('[ROSTER] Add character error:', err);
     return c.json({ error: 'Failed to add character' }, 500);
@@ -169,7 +184,7 @@ router.post('/:charName/status', async (c) => {
   const { teamSheetId } = c.get('session').user;
   const charName        = c.req.param('charName');
   const { status }      = await c.req.json();
-  if (!['Active', 'Inactive'].includes(status)) return c.json({ error: 'status must be Active or Inactive' }, 400);
+  if (!['Active', 'Bench', 'Inactive'].includes(status)) return c.json({ error: 'status must be Active, Bench, or Inactive' }, 400);
   try {
     await setRosterStatus(teamSheetId, charName, status);
     return c.json({ ok: true, charName, status });

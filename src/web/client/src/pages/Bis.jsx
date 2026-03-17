@@ -466,6 +466,18 @@ export default function Bis() {
         </p>
       </div>
 
+      <div className="admin-save-bar">
+        {saveMsg && <span className="save-msg">{saveMsg}</span>}
+        <a className="btn-secondary" href={apiPath('/')}>Cancel</a>
+        <button
+          className="btn-primary"
+          onClick={handleSave}
+          disabled={saving || dirtyCount === 0}
+        >
+          {saving ? 'Saving…' : `Save Changes${dirtyCount > 0 ? ` (${dirtyCount})` : ''}`}
+        </button>
+      </div>
+
       <div className="card">
         <table className="bis-table bis-form-table">
           <thead>
@@ -490,17 +502,6 @@ export default function Bis() {
             ))}
           </tbody>
         </table>
-      </div>
-
-      <div className="admin-save-bar">
-        {saveMsg && <span className="save-msg">{saveMsg}</span>}
-        <button
-          className="btn-primary"
-          onClick={handleSave}
-          disabled={saving || dirtyCount === 0}
-        >
-          {saving ? 'Saving…' : `Save Changes${dirtyCount > 0 ? ` (${dirtyCount})` : ''}`}
-        </button>
       </div>
     </div>
   );

@@ -178,6 +178,7 @@ const _CATALOG_RAW = [
   // Demon Hunter
   { spec: 'Havoc Demon Hunter',     cls: 'Demon Hunter', ivSlug: 'havoc-demon-hunter',     ivRole: 'dps'     },
   { spec: 'Vengeance Demon Hunter', cls: 'Demon Hunter', ivSlug: 'vengeance-demon-hunter', ivRole: 'tank'    },
+  { spec: 'Devourer Demon Hunter',  cls: 'Demon Hunter', ivSlug: 'devourer-demon-hunter',  ivRole: 'dps'     },
   // Druid
   { spec: 'Balance Druid',          cls: 'Druid',        ivSlug: 'balance-druid',          ivRole: 'dps'     },
   { spec: 'Feral Druid',            cls: 'Druid',        ivSlug: 'feral-druid',            ivRole: 'dps'     },
@@ -840,7 +841,7 @@ async function cmdFetchAll(sheetId, { overwrite = false, raidBis = false, source
   // ── Phase 2: Single batch write to Sheets ────────────────────────────────
   if (allEntries.length > 0) {
     console.log(`\nWriting ${allEntries.length} total entries to sheet…`);
-    const written = await writeDefaultBis(sheetId, allEntries, { replace: overwrite });
+    const written = await writeDefaultBis(allEntries, { replace: overwrite });
     console.log(`✓ ${written} rows written  (${allEntries.length - written} already existed)`);
     skipped += (allEntries.length - written);
   }
@@ -927,7 +928,7 @@ async function fetchAndWrite(entry, sheetId, {
   const db = itemDb ?? await getItemDb(sheetId);
   resolveItemIds(entries, db, { quiet });
 
-  return writeDefaultBis(sheetId, entries, { replace: overwrite });
+  return writeDefaultBis(entries, { replace: overwrite });
 }
 
 async function cmdClear(sheetId, specName, source) {

@@ -48,7 +48,9 @@ const TIER_SLOT_SHORT = { Head: 'He', Shoulders: 'Sh', Chest: 'Ch', Hands: 'Ha',
 function CurioCandidateRow({ c }) {
   return (
     <tr>
-      <td className="council-col-char">{c.charName}</td>
+      <td className="council-col-char">
+        {c.charName}{c.status === 'Bench' && <BenchDot />}
+      </td>
       <td className="council-col-spec">{c.spec}</td>
       <td className="council-col-tier-slots">
         {Object.entries(TIER_SLOT_SHORT).map(([slot, short]) => (
@@ -187,10 +189,16 @@ function BisIndicator({ match }) {
   return <span className="council-bis-no">—</span>;
 }
 
+function BenchDot() {
+  return <span className="council-bench-dot" title="Benched" />;
+}
+
 function CandidateRow({ c }) {
   return (
     <tr>
-      <td className="council-col-char">{c.charName}</td>
+      <td className="council-col-char">
+        {c.charName}{c.status === 'Bench' && <BenchDot />}
+      </td>
       <td className="council-col-spec">{c.spec}</td>
       <td className="council-col-stats">
         <span className="council-stat-bis">{c.bisH}/{c.bisM}</span>
@@ -268,6 +276,9 @@ function CandidateTable({ itemId, showAll, onToggle }) {
         </button>
         <span className="council-candidate-count">
           {sorted.length} candidate{sorted.length !== 1 ? 's' : ''}
+        </span>
+        <span className="council-legend">
+          <span className="council-bench-dot" /> Benched
         </span>
       </div>
 

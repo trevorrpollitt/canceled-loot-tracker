@@ -18,6 +18,7 @@ const SHEET_TO_CANONICAL = {
   // Demon Hunter
   'Havoc DH':             'Havoc Demon Hunter',
   'Vengeance DH':         'Vengeance Demon Hunter',
+  'Devourer DH':          'Devourer Demon Hunter',
   // Druid (Balance/Feral/Guardian are already full names in the sheet)
   'Balance Druid':        'Balance Druid',
   'Feral Druid':          'Feral Druid',
@@ -89,7 +90,7 @@ export function toSheet(canonicalSpec) {
 /** All sheet spec names, grouped by class. */
 export const CLASS_SPECS = {
   'Death Knight':  ['Blood DK', 'Frost DK', 'Unholy DK'],
-  'Demon Hunter':  ['Havoc DH', 'Vengeance DH'],
+  'Demon Hunter':  ['Havoc DH', 'Vengeance DH', 'Devourer DH'],
   'Druid':         ['Balance Druid', 'Feral Druid', 'Guardian Druid', 'Resto Druid'],
   'Evoker':        ['Devastation Evoker', 'Augmentation Evoker', 'Preservation Evoker'],
   'Hunter':        ['BM Hunter', 'MM Hunter', 'SV Hunter'],

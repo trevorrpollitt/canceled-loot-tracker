@@ -19,46 +19,51 @@ export default function Layout({ children }) {
 
   return (
     <div className="layout">
-      <nav className="nav">
-        <div className="nav-left">
-          <NavLink to="/" className="nav-brand">Home</NavLink>
-          <NavLink to="/bis" className="nav-link">Edit BIS</NavLink>
+      <header className="nav-header">
+        <div className="nav-top">
+          <NavLink to="/" className="nav-brand">
+            <img src="/logo.png" alt="Canceled" className="nav-logo" />
+          </NavLink>
+          {user?.teams?.length > 0 && (
+            <div className="nav-team">
+              <span className="nav-team-label">Select Raid Team:</span>
+              <select
+                className="nav-team-select"
+                value={user.teamName ?? ''}
+                onChange={e => switchTeam(e.target.value)}
+                disabled={user.teams.length <= 1}
+              >
+                {user.teams.map(t => (
+                  <option key={t.teamName} value={t.teamName}>{t.teamName}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="nav-right">
+            {label && <span className="nav-user">{label}</span>}
+            <a className="nav-logout" href={apiPath('/api/auth/logout')}>Logout</a>
+          </div>
+        </div>
+
+        <nav className="nav-tabs">
+          <NavLink to="/bis" className="nav-tab">Edit BIS</NavLink>
           {user?.isOfficer && (
-            <NavLink to="/bis/review" className="nav-link">BIS Review</NavLink>
+            <NavLink to="/bis/review" className="nav-tab">BIS Review</NavLink>
           )}
           {user?.isOfficer && (
-            <NavLink to="/council" className="nav-link">Council</NavLink>
+            <NavLink to="/council" className="nav-tab">Council</NavLink>
           )}
           {user?.isOfficer && (
-            <NavLink to="/roster" className="nav-link">Roster</NavLink>
+            <NavLink to="/roster" className="nav-tab">Roster</NavLink>
           )}
           {user?.isOfficer && (
-            <NavLink to="/import" className="nav-link">Loot Import</NavLink>
+            <NavLink to="/import" className="nav-tab">Loot Import</NavLink>
           )}
           {user?.isGlobalOfficer && (
-            <NavLink to="/admin/default-bis" className="nav-link">Raid BIS</NavLink>
+            <NavLink to="/admin/default-bis" className="nav-tab">Raid BIS</NavLink>
           )}
-        </div>
-        <div className="nav-right">
-          {label && <span className="nav-user">{label}</span>}
-          <a className="nav-logout" href={apiPath('/api/auth/logout')}>Logout</a>
-        </div>
-      </nav>
-
-      {user?.teams?.length > 1 && (
-        <div className="team-banner">
-          <span className="team-banner-label">Select Raid Team:</span>
-          <select
-            className="team-banner-select"
-            value={user.teamName ?? ''}
-            onChange={e => switchTeam(e.target.value)}
-          >
-            {user.teams.map(t => (
-              <option key={t.teamName} value={t.teamName}>{t.teamName}</option>
-            ))}
-          </select>
-        </div>
-      )}
+        </nav>
+      </header>
 
       <main className="main">{children}</main>
     </div>
