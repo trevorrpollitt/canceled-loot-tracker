@@ -32,7 +32,7 @@ router.get('/', requireAuth, async (c) => {
     }
 
     const loot = lootLog
-      .filter(e => e.recipientChar === charName)
+      .filter(e => (e.recipientChar ?? '').toLowerCase() === charName.toLowerCase())
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .map(e => ({
         ...e,
@@ -40,7 +40,7 @@ router.get('/', requireAuth, async (c) => {
       }));
 
     const approvedBis = bisSubmissions.filter(
-      s => s.charName === charName && s.status === 'Approved'
+      s => s.charName.toLowerCase() === charName.toLowerCase() && s.status === 'Approved'
     );
 
     const canonicalSpec = toCanonical(spec);
@@ -49,8 +49,8 @@ router.get('/', requireAuth, async (c) => {
 
     const allCharNames  = (c.get('session').user.chars ?? []).map(ch => ch.charName);
     const charBisStatus = Object.fromEntries(allCharNames.map(name => [name, {
-      pending:  bisSubmissions.filter(s => s.charName === name && s.status === 'Pending').length,
-      rejected: bisSubmissions.filter(s => s.charName === name && s.status === 'Rejected').length,
+      pending:  bisSubmissions.filter(s => s.charName.toLowerCase() === name.toLowerCase() && s.status === 'Pending').length,
+      rejected: bisSubmissions.filter(s => s.charName.toLowerCase() === name.toLowerCase() && s.status === 'Rejected').length,
     }]));
 
     return c.json({ loot, bis: approvedBis, specDefaults, charName, charBisStatus });

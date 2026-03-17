@@ -284,15 +284,15 @@ export async function getRoster(sheetId) {
     const rows = await readRange(sheetId, 'Roster!A2:G');
     return rows
       .map(r => ({
-        charName:  r[0] ?? '',
-        class:     r[1] ?? '',
-        spec:      r[2] ?? '',
-        role:      r[3] ?? '',
-        status:    r[4] ?? '',
-        ownerId:   r[5] ?? '',
-        ownerNick: r[6] ?? '',
+        charName:  String(r[0] ?? '').trim(),
+        class:     String(r[1] ?? '').trim(),
+        spec:      String(r[2] ?? '').trim(),
+        role:      String(r[3] ?? '').trim(),
+        status:    String(r[4] ?? '').trim(),
+        ownerId:   String(r[5] ?? '').trim(),
+        ownerNick: String(r[6] ?? '').trim(),
       }))
-      .filter(c => c.charName && c.status !== 'Deleted');
+      .filter(c => c.charName && c.status.toLowerCase() !== 'deleted');
   });
 }
 
@@ -331,7 +331,7 @@ export async function setOwnerNick(sheetId, ownerId, ownerNick) {
 export async function setRosterOwner(sheetId, charName, ownerId, ownerNick) {
   log.verbose(`[sheets] setRosterOwner char="${charName}" ownerId=${ownerId} (sheet ${sheetId.slice(-6)})`);
   const rows = await readRange(sheetId, 'Roster!A2:G');
-  const idx  = rows.findIndex(r => (r[0] ?? '') === charName);
+  const idx  = rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
   if (idx < 0) throw new Error(`Character "${charName}" not found in roster`);
   const rowNum = idx + 2;
   log.debug(`[sheets] setRosterOwner found "${charName}" at row ${rowNum}`);
@@ -350,7 +350,7 @@ export async function setRosterOwner(sheetId, charName, ownerId, ownerNick) {
 export async function setRosterStatus(sheetId, charName, status) {
   log.verbose(`[sheets] setRosterStatus char="${charName}" status="${status}" (sheet ${sheetId.slice(-6)})`);
   const rows = await readRange(sheetId, 'Roster!A2:E');
-  const idx  = rows.findIndex(r => (r[0] ?? '') === charName);
+  const idx  = rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
   if (idx < 0) throw new Error(`Character "${charName}" not found in roster`);
   const rowNum = idx + 2; // +1 for 1-indexed, +1 for header
   log.debug(`[sheets] setRosterStatus found "${charName}" at row ${rowNum}`);
@@ -387,7 +387,7 @@ export async function addRosterChar(sheetId, charName, cls, spec, role, status) 
 export async function deleteRosterChar(sheetId, charName) {
   log.verbose(`[sheets] deleteRosterChar char="${charName}" (sheet ${sheetId.slice(-6)})`);
   const rows = await readRange(sheetId, 'Roster!A2:E');
-  const idx  = rows.findIndex(r => (r[0] ?? '') === charName);
+  const idx  = rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
   if (idx < 0) throw new Error(`Character "${charName}" not found in roster`);
   const rowNum = idx + 2;
   await batchWriteRanges(sheetId, [
@@ -458,7 +458,7 @@ export async function getRclcResponseMap(sheetId) {
       if (!r[0]) continue;
       map.set(r[0].trim().toLowerCase(), {
         internalType: r[1]?.trim() ?? 'Non-BIS',
-        counted:      (r[2]?.trim() ?? 'Yes') === 'Yes',
+        counted:      (r[2]?.trim() ?? 'Yes').toLowerCase() === 'yes',
       });
     }
     return map;
@@ -522,19 +522,19 @@ export async function getBisSubmissions(sheetId) {
     const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
     return rows
       .map(r => ({
-        id:           r[0]  ?? '',
-        charName:     r[1]  ?? '',
-        spec:         r[2]  ?? '',
-        slot:         r[3]  ?? '',
-        trueBis:      r[4]  ?? '',
-        raidBis:      r[5]  ?? '',
-        rationale:    r[6]  ?? '',
-        status:       r[7]  ?? 'Pending',
-        submittedAt:  r[8]  ?? '',
-        reviewedBy:   r[9]  ?? '',
-        officerNote:  r[10] ?? '',
-        trueBisItemId:  r[11] ?? '',
-        raidBisItemId:  r[12] ?? '',
+        id:             String(r[0]  ?? '').trim(),
+        charName:       String(r[1]  ?? '').trim(),
+        spec:           String(r[2]  ?? '').trim(),
+        slot:           String(r[3]  ?? '').trim(),
+        trueBis:        String(r[4]  ?? '').trim(),
+        raidBis:        String(r[5]  ?? '').trim(),
+        rationale:      String(r[6]  ?? '').trim(),
+        status:         String(r[7]  ?? 'Pending').trim(),
+        submittedAt:    String(r[8]  ?? '').trim(),
+        reviewedBy:     String(r[9]  ?? '').trim(),
+        officerNote:    String(r[10] ?? '').trim(),
+        trueBisItemId:  String(r[11] ?? '').trim(),
+        raidBisItemId:  String(r[12] ?? '').trim(),
       }))
       .filter(r => r.id);
   });
@@ -563,7 +563,7 @@ export async function upsertBisSubmission(sheetId, {
   const today = new Date().toISOString().slice(0, 10);
 
   const idx = rows.findIndex(
-    r => (r[1] ?? '') === charName && (r[3] ?? '') === slot
+    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() && String(r[3] ?? '').toLowerCase() === slot.toLowerCase()
   );
 
   if (idx >= 0) {
@@ -652,7 +652,7 @@ export async function batchUpsertBisSubmissions(sheetId, updates) {
     } = u;
 
     const idx = rows.findIndex(
-      r => (r[1] ?? '') === charName && (r[3] ?? '') === slot
+      r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() && String(r[3] ?? '').toLowerCase() === slot.toLowerCase()
     );
 
     if (idx >= 0) {
@@ -711,7 +711,7 @@ export async function batchUpsertBisSubmissions(sheetId, updates) {
 export async function approveBisSubmission(sheetId, submissionId, reviewerName) {
   log.verbose(`[sheets] approveBisSubmission id="${submissionId}" reviewer="${reviewerName}" (sheet ${sheetId.slice(-6)})`);
   const rows = await readRange(sheetId, 'BIS Submissions!A2:I');
-  const idx  = rows.findIndex(r => (r[0] ?? '') === submissionId);
+  const idx  = rows.findIndex(r => String(r[0] ?? '') === submissionId);
   if (idx < 0) throw new Error(`BIS submission "${submissionId}" not found`);
 
   const rowNum      = idx + 2;
@@ -740,7 +740,7 @@ export async function approveBisSubmission(sheetId, submissionId, reviewerName) 
 export async function rejectBisSubmission(sheetId, submissionId, reviewerName, officerNote = '') {
   log.verbose(`[sheets] rejectBisSubmission id="${submissionId}" reviewer="${reviewerName}" (sheet ${sheetId.slice(-6)})`);
   const rows = await readRange(sheetId, 'BIS Submissions!A2:K');
-  const idx  = rows.findIndex(r => (r[0] ?? '') === submissionId);
+  const idx  = rows.findIndex(r => String(r[0] ?? '') === submissionId);
   if (idx < 0) throw new Error(`BIS submission "${submissionId}" not found`);
 
   const rowNum = idx + 2;
@@ -769,9 +769,9 @@ export async function rejectBisSubmission(sheetId, submissionId, reviewerName, o
 export async function clearPendingBisSubmission(sheetId, charName, slot) {
   const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
   const idx  = rows.findIndex(
-    r => (r[1] ?? '') === charName &&
-         (r[3] ?? '') === slot     &&
-         (r[7] ?? '') === 'Pending'
+    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() &&
+         String(r[3] ?? '').toLowerCase() === slot.toLowerCase()     &&
+         String(r[7] ?? '').toLowerCase() === 'pending'
   );
   if (idx < 0) return false;
 
@@ -795,7 +795,7 @@ export async function clearPendingBisSubmission(sheetId, charName, slot) {
 export async function resetBisRaidBisField(sheetId, charName, slot) {
   const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
   const idx  = rows.findIndex(
-    r => (r[1] ?? '') === charName && (r[3] ?? '') === slot
+    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() && String(r[3] ?? '').toLowerCase() === slot.toLowerCase()
   );
   if (idx < 0) return false;
 
@@ -821,7 +821,7 @@ export async function resetBisRaidBisField(sheetId, charName, slot) {
 export async function clearBisSubmission(sheetId, charName, slot) {
   const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
   const idx  = rows.findIndex(
-    r => (r[1] ?? '') === charName && (r[3] ?? '') === slot
+    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() && String(r[3] ?? '').toLowerCase() === slot.toLowerCase()
   );
   if (idx < 0) return false;
 
@@ -843,9 +843,9 @@ export async function clearBisSubmission(sheetId, charName, slot) {
 export async function clearRejectedBisSubmission(sheetId, charName, slot) {
   const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
   const idx  = rows.findIndex(
-    r => (r[1] ?? '') === charName &&
-         (r[3] ?? '') === slot     &&
-         (r[7] ?? '') === 'Rejected'
+    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() &&
+         String(r[3] ?? '').toLowerCase() === slot.toLowerCase()     &&
+         String(r[7] ?? '').toLowerCase() === 'rejected'
   );
   if (idx < 0) return false;
 
@@ -912,16 +912,16 @@ export async function getItemDb() {
     const rows = await readRange(sheetId, 'Item DB!A2:J');
     return rows
       .map(r => ({
-        itemId:      r[0] ?? '',
-        name:        r[1] ?? '',
-        slot:        r[2] ?? '',
-        sourceType:  r[3] ?? '',
-        sourceName:  r[4] ?? '',
-        instance:    r[5] ?? '',
-        difficulty:  r[6] ?? '',
-        armorType:   r[7] ?? '',
-        isTierToken: r[8] === true || r[8] === 'TRUE',
-        weaponType:  r[9] ?? '',
+        itemId:      String(r[0] ?? '').trim(),
+        name:        String(r[1] ?? '').trim(),
+        slot:        String(r[2] ?? '').trim(),
+        sourceType:  String(r[3] ?? '').trim(),
+        sourceName:  String(r[4] ?? '').trim(),
+        instance:    String(r[5] ?? '').trim(),
+        difficulty:  String(r[6] ?? '').trim(),
+        armorType:   String(r[7] ?? '').trim(),
+        isTierToken: r[8] === true || String(r[8] ?? '').trim().toLowerCase() === 'true',
+        weaponType:  String(r[9] ?? '').trim(),
       }))
       .filter(r => r.itemId);
   });
@@ -939,13 +939,13 @@ export async function getDefaultBis() {
     const rows = await readRange(sheetId, 'Default BIS!A2:G');
     return rows
       .map(r => ({
-        spec:          r[0] ?? '',
-        slot:          r[1] ?? '',
-        trueBis:       r[2] ?? '',
-        trueBisItemId: r[3] ?? '',
-        raidBis:       r[4] ?? '',
-        raidBisItemId: r[5] ?? '',
-        source:        r[6] ?? '',
+        spec:          String(r[0] ?? '').trim(),
+        slot:          String(r[1] ?? '').trim(),
+        trueBis:       String(r[2] ?? '').trim(),
+        trueBisItemId: String(r[3] ?? '').trim(),
+        raidBis:       String(r[4] ?? '').trim(),
+        raidBisItemId: String(r[5] ?? '').trim(),
+        source:        String(r[6] ?? '').trim(),
       }))
       .filter(r => r.spec);
   });
@@ -1095,7 +1095,7 @@ export async function setSpecBisSource(spec, source) {
   const sheetId = getMasterSheetId();
   await ensureSpecBisConfigTab();
   const rows = await readRange(sheetId, `${SPEC_BIS_CONFIG_TAB}!A2:B`);
-  const rowIndex = rows.findIndex(r => r[0] === spec);
+  const rowIndex = rows.findIndex(r => String(r[0] ?? '').toLowerCase() === spec.toLowerCase());
   if (rowIndex >= 0) {
     await writeRange(sheetId, `${SPEC_BIS_CONFIG_TAB}!B${rowIndex + 2}`, [[source]]);
   } else {
@@ -1153,11 +1153,13 @@ export async function getEffectiveDefaultBis() {
     const result = [];
     for (const [, rows] of bySpecSlot) {
       const preferred = config.get(rows[0].spec) ?? 'Icy Veins';
-      let row = rows.find(r => r.source === preferred);
+      const preferredLc = preferred.toLowerCase();
+      let row = rows.find(r => r.source.toLowerCase() === preferredLc);
       if (!row) {
         // Preferred source not available — fall back in order
         for (const src of FALLBACK_ORDER) {
-          row = rows.find(r => r.source === src);
+          const srcLc = src.toLowerCase();
+          row = rows.find(r => r.source.toLowerCase() === srcLc);
           if (row) break;
         }
       }
@@ -1165,7 +1167,7 @@ export async function getEffectiveDefaultBis() {
 
       // Merge officer overrides on top of the seed row (override non-empty field wins)
       const ovr = overrides.find(o =>
-        o.spec === row.spec && o.slot === row.slot && o.source === row.source
+        o.spec === row.spec && o.slot === row.slot && o.source.toLowerCase() === row.source.toLowerCase()
       );
       result.push(ovr ? {
         ...row,
@@ -1290,9 +1292,9 @@ export async function updateDefaultBisRaidBis(updates) {
 
   for (const upd of updates) {
     const idx = rows.findIndex(r =>
-      (r[0] ?? '') === upd.spec &&
-      (r[1] ?? '') === upd.slot &&
-      (r[6] ?? '') === upd.source
+      String(r[0] ?? '').trim() === upd.spec &&
+      String(r[1] ?? '').trim() === upd.slot &&
+      String(r[6] ?? '').trim().toLowerCase() === upd.source.toLowerCase()
     );
     if (idx < 0) {
       // Row doesn't exist yet — create it (e.g. Off-Hand for a dual-wield spec
@@ -1369,13 +1371,13 @@ export async function getDefaultBisOverrides() {
       return rows
         .filter(r => r[0] && r[0] !== 'Spec') // skip header row if present
         .map(r => ({
-          spec:          r[0] ?? '',
-          slot:          r[1] ?? '',
-          trueBis:       r[2] ?? '',
-          trueBisItemId: r[3] ?? '',
-          raidBis:       r[4] ?? '',
-          raidBisItemId: r[5] ?? '',
-          source:        r[6] ?? '',
+          spec:          String(r[0] ?? '').trim(),
+          slot:          String(r[1] ?? '').trim(),
+          trueBis:       String(r[2] ?? '').trim(),
+          trueBisItemId: String(r[3] ?? '').trim(),
+          raidBis:       String(r[4] ?? '').trim(),
+          raidBisItemId: String(r[5] ?? '').trim(),
+          source:        String(r[6] ?? '').trim(),
         }));
     } catch {
       return [];
@@ -1410,9 +1412,9 @@ export async function updateDefaultBisOverrides(updates) {
 
   for (const upd of updates) {
     const match = dataRows.find(({ r }) =>
-      (r[0] ?? '') === upd.spec &&
-      (r[1] ?? '') === upd.slot &&
-      (r[6] ?? '') === upd.source
+      String(r[0] ?? '').trim() === upd.spec &&
+      String(r[1] ?? '').trim() === upd.slot &&
+      String(r[6] ?? '').trim().toLowerCase() === upd.source.toLowerCase()
     );
     if (!match) {
       newRows.push([

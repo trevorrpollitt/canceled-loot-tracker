@@ -37,7 +37,7 @@ router.post('/active-char', requireAuth, async (c) => {
 
   const session     = c.get('session');
   const { chars = [] } = session.user;
-  const target = chars.find(ch => ch.charName === charName);
+  const target = chars.find(ch => ch.charName.toLowerCase() === charName.toLowerCase());
   if (!target) return c.json({ error: 'Character not found on this account' }, 400);
 
   session.user.charName = target.charName;

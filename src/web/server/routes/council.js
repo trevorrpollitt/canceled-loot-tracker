@@ -93,7 +93,7 @@ router.get('/candidates', async (c) => {
 
     const stats = {};
     for (const entry of lootLog) {
-      const n = entry.recipientChar;
+      const n = (entry.recipientChar ?? '').toLowerCase();
       if (!n) continue;
       if (!stats[n]) stats[n] = { bisN: 0, bisH: 0, bisM: 0, nonBisN: 0, nonBisH: 0, nonBisM: 0, tertiary: 0, offspec: 0 };
       const s = stats[n]; const d = entry.difficulty ?? ''; const t = entry.upgradeType;
@@ -109,7 +109,7 @@ router.get('/candidates', async (c) => {
     const acctStats = {};
     for (const r of roster) {
       if (!r.ownerId) continue;
-      const s = stats[r.charName] ?? {};
+      const s = stats[r.charName.toLowerCase()] ?? {};
       if (!acctStats[r.ownerId]) acctStats[r.ownerId] = { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       const a = acctStats[r.ownerId];
       a.bisH += s.bisH ?? 0; a.bisM += s.bisM ?? 0; a.nonBisH += s.nonBisH ?? 0; a.nonBisM += s.nonBisM ?? 0;
@@ -119,7 +119,7 @@ router.get('/candidates', async (c) => {
     for (const sub of bisSubmissions) {
       if (sub.status !== 'Approved') continue;
       if (sub.slot.replace(/ [12]$/, '') !== itemSlot) continue;
-      approvedBis[sub.charName + '|' + sub.slot] = sub;
+      approvedBis[sub.charName.toLowerCase() + '|' + sub.slot] = sub;
     }
 
     const defaultBisMap = {};
@@ -136,7 +136,7 @@ router.get('/candidates', async (c) => {
       if (!isEligible(item, armorType, canonSpec)) continue;
 
       let personalSub = null;
-      for (const key of [char.charName + '|' + itemSlot, char.charName + '|' + itemSlot + ' 1', char.charName + '|' + itemSlot + ' 2']) {
+      for (const key of [char.charName.toLowerCase() + '|' + itemSlot, char.charName.toLowerCase() + '|' + itemSlot + ' 1', char.charName.toLowerCase() + '|' + itemSlot + ' 2']) {
         if (approvedBis[key]) { personalSub = approvedBis[key]; break; }
       }
 
@@ -158,7 +158,7 @@ router.get('/candidates', async (c) => {
       const resolvedRaidBisId = effectiveRaidBisId || (effectiveTrueBis   !== '<Crafted>' ? effectiveTrueBisId : '');
       const raidBisMatch      = resolvedRaidBis ? matchesBis(resolvedRaidBis, resolvedRaidBisId, item, armorType, itemSlot) : false;
 
-      const s    = stats[char.charName]  ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
+      const s    = stats[char.charName.toLowerCase()]  ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       const acct = acctStats[char.ownerId] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
 
       candidates.push({
@@ -197,7 +197,7 @@ router.get('/curio-candidates', async (c) => {
 
     const stats = {};
     for (const entry of lootLog) {
-      const n = entry.recipientChar; if (!n) continue;
+      const n = (entry.recipientChar ?? '').toLowerCase(); if (!n) continue;
       if (!stats[n]) stats[n] = { bisN: 0, bisH: 0, bisM: 0, nonBisN: 0, nonBisH: 0, nonBisM: 0, tertiary: 0, offspec: 0 };
       const s = stats[n]; const d = entry.difficulty ?? ''; const t = entry.upgradeType;
       if (t === 'BIS')     { if (d === 'Normal') s.bisN++; else if (d === 'Heroic') s.bisH++; else if (d === 'Mythic') s.bisM++; }
@@ -211,7 +211,7 @@ router.get('/curio-candidates', async (c) => {
     const acctStats = {};
     for (const r of roster) {
       if (!r.ownerId) continue;
-      const s = stats[r.charName] ?? {};
+      const s = stats[r.charName.toLowerCase()] ?? {};
       if (!acctStats[r.ownerId]) acctStats[r.ownerId] = { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       const a = acctStats[r.ownerId];
       a.bisH += s.bisH ?? 0; a.bisM += s.bisM ?? 0; a.nonBisH += s.nonBisH ?? 0; a.nonBisM += s.nonBisM ?? 0;
@@ -220,7 +220,7 @@ router.get('/curio-candidates', async (c) => {
     const approvedBis = {};
     for (const sub of bisSubmissions) {
       if (sub.status !== 'Approved' || !TIER_SLOTS.includes(sub.slot)) continue;
-      approvedBis[sub.charName + '|' + sub.slot] = sub;
+      approvedBis[sub.charName.toLowerCase() + '|' + sub.slot] = sub;
     }
 
     const defaultBisMap = {};
@@ -235,14 +235,14 @@ router.get('/curio-candidates', async (c) => {
       const canonSpec = toCanonical(char.spec);
       const tierSlotsWanted = [];
       for (const slot of TIER_SLOTS) {
-        const personalSub = approvedBis[char.charName + '|' + slot] ?? null;
+        const personalSub = approvedBis[char.charName.toLowerCase() + '|' + slot] ?? null;
         const defRow      = defaultBisMap[canonSpec + '|' + slot] ?? null;
         const effectiveTrueBis = personalSub?.trueBis ?? defRow?.trueBis ?? '';
         const effectiveRaidBis = personalSub?.raidBis ?? defRow?.raidBis ?? '';
         const resolvedRaidBis  = effectiveRaidBis || (effectiveTrueBis !== '<Crafted>' ? effectiveTrueBis : '');
         if (resolvedRaidBis === '<Tier>') tierSlotsWanted.push(slot);
       }
-      const s    = stats[char.charName]    ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
+      const s    = stats[char.charName.toLowerCase()]    ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       const acct = acctStats[char.ownerId] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       candidates.push({
         charName: char.charName, class: char.class, spec: char.spec, status: char.status, tierSlotsWanted,

@@ -75,7 +75,7 @@ router.post('/', async (c) => {
 
   try {
     const roster = await getRoster(teamSheetId);
-    if (roster.some(r => r.charName === charName.trim())) {
+    if (roster.some(r => r.charName.toLowerCase() === charName.trim().toLowerCase())) {
       return c.json({ error: 'Character already exists on this roster' }, 409);
     }
     const role            = specToRole(spec.trim());
@@ -117,7 +117,7 @@ router.get('/:charName', async (c) => {
       getRoster(teamSheetId), getLootLog(teamSheetId), getBisSubmissions(teamSheetId),
       getEffectiveDefaultBis(), getItemDb(),
     ]);
-    const rosterChar = roster.find(r => r.charName === charName);
+    const rosterChar = roster.find(r => r.charName.toLowerCase() === charName.toLowerCase());
     if (!rosterChar) return c.json({ error: 'Character not found' }, 404);
 
     const itemIdByName = new Map();
@@ -128,7 +128,7 @@ router.get('/:charName', async (c) => {
       : [charName];
 
     const loot = lootLog
-      .filter(e => e.recipientChar === charName)
+      .filter(e => (e.recipientChar ?? '').toLowerCase() === charName.toLowerCase())
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .map(e => ({ ...e, itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '' }));
 
@@ -139,7 +139,7 @@ router.get('/:charName', async (c) => {
           .map(e => ({ ...e, itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '' }))
       : [];
 
-    const approvedBis   = bisSubmissions.filter(s => s.charName === charName && s.status === 'Approved');
+    const approvedBis   = bisSubmissions.filter(s => s.charName.toLowerCase() === charName.toLowerCase() && s.status === 'Approved');
     const canonicalSpec = toCanonical(rosterChar.spec);
     const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
     const specDefaults  = applyRaidBisInference(specRows, itemDb);

@@ -71,12 +71,21 @@ const CANONICAL_TO_SHEET = Object.fromEntries(
   Object.entries(SHEET_TO_CANONICAL).map(([sheet, canon]) => [canon, sheet])
 );
 
+// Case-insensitive fallback map for toCanonical()
+const SHEET_TO_CANONICAL_LOWER = Object.fromEntries(
+  Object.entries(SHEET_TO_CANONICAL).map(([k, v]) => [k.toLowerCase(), v])
+);
+
 /**
  * Convert a sheet spec name to the canonical name used in Default BIS.
+ * Case-insensitive: "blood dk" and "Blood DK" both resolve correctly.
  * Returns the input unchanged if no mapping exists (safe fallback).
  */
 export function toCanonical(sheetSpec) {
-  return SHEET_TO_CANONICAL[sheetSpec] ?? sheetSpec;
+  if (!sheetSpec) return sheetSpec;
+  return SHEET_TO_CANONICAL[sheetSpec]
+    ?? SHEET_TO_CANONICAL_LOWER[sheetSpec.toLowerCase()]
+    ?? sheetSpec;
 }
 
 /**

@@ -74,7 +74,7 @@ router.get('/', async (c) => {
     const armorType     = getArmorType(canonicalSpec);
 
     const bySlot = Object.fromEntries(
-      submissions.filter(s => s.charName === charName).map(s => [s.slot, s])
+      submissions.filter(s => s.charName.toLowerCase() === charName.toLowerCase()).map(s => [s.slot, s])
     );
 
     const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
