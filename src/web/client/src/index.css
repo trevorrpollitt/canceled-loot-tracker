@@ -130,23 +130,52 @@ a:hover { color: var(--primary-h); }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 48px 40px;
+  padding: 32px 32px 28px;
   text-align: center;
   width: 320px;
 }
 
-.login-title { font-size: 28px; font-weight: 800; color: var(--primary); margin-bottom: 4px; }
-.login-sub   { color: var(--text-muted); margin-bottom: 32px; }
-.login-error { color: var(--primary); font-size: 13px; margin-bottom: 16px; }
+.login-logo {
+  height: 56px;
+  width: 56px;
+  object-fit: contain;
+}
+
+.login-title {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 2.5rem;
+  margin-bottom: 8px;
+}
+
+.login-title span {
+  color: var(--primary);
+}
+
+.login-sub   { 
+  font-size: 1.2rem;
+  color: var(--text-muted); 
+  margin-bottom: 24px;
+}
+
+.login-error { 
+  color: var(--primary); 
+  font-size: 13px; 
+  margin-bottom: 16px; 
+}
 
 .btn-discord {
-  display: inline-block;
+  display: block;
   background: #5865F2;
   color: #fff;
-  padding: 10px 24px;
+  padding: 12px 24px;
   border-radius: var(--radius);
   font-weight: 600;
   transition: background 0.15s;
+  width: 100%;
 }
 .btn-discord:hover { background: #4752C4; color: #fff; }
 

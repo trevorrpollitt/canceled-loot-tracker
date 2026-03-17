@@ -17,8 +17,11 @@ export default function Login() {
   return (
     <div className="login-page">
       <div className="login-card">
-        <h1 className="login-title">❌ Canceled</h1>
-        <p className="login-sub">Loot Council</p>
+        <h1 className="login-title">
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="Canceled" className="login-logo" />
+          <span>Canceled</span>
+        </h1>
+        <p className="login-sub">Loot Tracker</p>
         {error && (
           <p className="login-error">
             {error === 'auth_failed' ? 'Authentication failed. Please try again.' : 'Something went wrong.'}

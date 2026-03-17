@@ -22,7 +22,7 @@ export default function Layout({ children }) {
       <header className="nav-header">
         <div className="nav-top">
           <NavLink to="/" className="nav-brand">
-            <img src="/logo.png" alt="Canceled" className="nav-logo" />
+            <img src={`${import.meta.env.BASE_URL}logo.png`} alt="Canceled" className="nav-logo" />
           </NavLink>
           {user?.teams?.length > 0 && (
             <div className="nav-team">
