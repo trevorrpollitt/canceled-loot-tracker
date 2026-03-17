@@ -101,6 +101,19 @@ router.get('/default-bis', requireGlobalOfficer, async (c) => {
       };
     });
 
+    // For dual-wield specs whose default BIS was seeded from a 2H guide, the
+    // Off-Hand slot may be absent. Inject a synthetic editable row so officers
+    // can set the Raid BIS without needing to re-seed.
+    if (canDualWield(canonicalSpec) && !withOptions.some(r => r.slot === 'Off-Hand')) {
+      withOptions.push({
+        slot: 'Off-Hand', source: displaySource,
+        trueBis: '', trueBisItemId: '', raidBis: '', raidBisItemId: '',
+        raidBisAuto: false,
+        options:     itemOptionsForSlot(itemDb, 'Off-Hand', armorType, canonicalSpec),
+        hasTier: false, hasCatalyst: false,
+      });
+    }
+
     return c.json({ spec, source: displaySource, availableSources, preferredSource, rows: withOptions });
   } catch (err) {
     console.error('[ADMIN] default-bis GET error:', err);

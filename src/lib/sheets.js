@@ -1197,6 +1197,7 @@ export async function updateDefaultBisRaidBis(updates) {
 
   const rows = await readRange(sheetId, 'Default BIS!A2:G');
   const batchData = [];
+  const newRows   = [];
 
   for (const upd of updates) {
     const idx = rows.findIndex(r =>
@@ -1204,7 +1205,15 @@ export async function updateDefaultBisRaidBis(updates) {
       (r[1] ?? '') === upd.slot &&
       (r[6] ?? '') === upd.source
     );
-    if (idx < 0) continue;
+    if (idx < 0) {
+      // Row doesn't exist yet — create it (e.g. Off-Hand for a dual-wield spec
+      // whose default BIS was seeded from a 2H guide).
+      newRows.push([
+        upd.spec, upd.slot, upd.trueBis ?? '', itemIdCell(upd.trueBisItemId ?? ''),
+        upd.raidBis ?? '', itemIdCell(upd.raidBisItemId ?? ''), upd.source,
+      ]);
+      continue;
+    }
 
     const rowNum = idx + 2; // +1 for 1-indexed, +1 for header row
     batchData.push({
@@ -1213,6 +1222,7 @@ export async function updateDefaultBisRaidBis(updates) {
     });
   }
 
+  if (newRows.length) await appendRows(sheetId, 'Default BIS!A:G', newRows);
   if (!batchData.length) return;
 
   const url = `${SHEETS_BASE}/${sheetId}/values:batchUpdate`;
