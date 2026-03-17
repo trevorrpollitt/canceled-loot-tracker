@@ -9,6 +9,7 @@
 import { Hono } from 'hono';
 import { getAllTeams } from '../../../lib/teams.js';
 import { getRoster, getGlobalConfig } from '../../../lib/sheets.js';
+import { log } from '../../../lib/logger.js';
 
 const router      = new Hono();
 const DISCORD_API = 'https://discord.com/api/v10';
@@ -61,13 +62,12 @@ router.get('/callback', async (c) => {
     });
     if (!userRes.ok) throw new Error(`Discord user fetch failed: ${userRes.status}`);
     const discordUser = await userRes.json();
-    console.log(`[AUTH] Discord user: id=${discordUser.id} username=${discordUser.username}`);
+    log.verbose(`[auth] Discord user: id=${discordUser.id} username=${discordUser.username}`);
 
     // 3. Find ALL teams this Discord user belongs to (no early exit)
     const userTeams = [];
     for (const team of getAllTeams()) {
       const roster = await getRoster(team.sheetId);
-      console.log(`[AUTH] Roster for team ${team.name}: ${roster.map(ch => `${ch.charName}(${ch.ownerId})`).join(', ')}`);
       const chars = roster.filter(ch => ch.ownerId === discordUser.id);
       if (chars.length) userTeams.push({ team, chars });
     }
@@ -81,16 +81,20 @@ router.get('/callback', async (c) => {
       const guildId      = globalConfig.guild_id || null;
       globalOfficerRole  = globalConfig.global_officer_role_id || null;
       if (guildId) {
+        log.verbose(`[auth] fetching guild member guildId=${guildId} userId=${discordUser.id} botTokenPrefix=${process.env.DISCORD_TOKEN?.slice(0, 10)}…`);
         const memberRes = await fetch(`${DISCORD_API}/guilds/${guildId}/members/${discordUser.id}`, {
           headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
         });
         if (memberRes.ok) {
           const member = await memberRes.json();
           guildRoles = member.roles ?? [];
+          log.verbose(`[auth] guild roles for ${discordUser.username}: [${guildRoles.join(', ')}]`);
+        } else {
+          log.warn(`[auth] guild member fetch failed: ${memberRes.status} for user ${discordUser.id}`);
         }
       }
     } catch (err) {
-      console.warn('[AUTH] Could not fetch guild roles:', err.message);
+      log.warn('[auth] Could not fetch guild roles:', err.message);
     }
 
     // 5. Build the teams array with per-team officer status.
@@ -106,6 +110,12 @@ router.get('/callback', async (c) => {
     const activeTeam = teams[0] ?? null;
     const activeChar = activeTeam?.chars[0] ?? null;
 
+    for (const t of teams) {
+      log.verbose(`[auth]   team=${t.teamName} isOfficer=${t.isOfficer} chars=[${t.chars.map(ch => ch.charName).join(', ')}]`);
+    }
+    const isGlobalOfficer = globalOfficerRole ? guildRoles.includes(globalOfficerRole) : false;
+    log.verbose(`[auth] resolved → char=${activeChar?.charName ?? 'none'} spec=${activeChar?.spec ?? 'none'} isOfficer=${activeTeam?.isOfficer ?? false} isGlobalOfficer=${isGlobalOfficer} teams=${teams.length}`);
+
     // 7. Store session
     c.get('session').user = {
       id:          discordUser.id,
@@ -118,14 +128,14 @@ router.get('/callback', async (c) => {
       role:        activeChar?.role        ?? null,
       status:      activeChar?.status      ?? null,
       isOfficer:       activeTeam?.isOfficer ?? false,
-      isGlobalOfficer: globalOfficerRole ? guildRoles.includes(globalOfficerRole) : false,
+      isGlobalOfficer: isGlobalOfficer,
       chars:           activeTeam?.chars    ?? [],
       teams,
     };
 
     return c.redirect(`${BASE}/`);
   } catch (err) {
-    console.error('[AUTH] OAuth error:', err);
+    log.error('[auth] OAuth error:', err);
     return c.redirect(`${BASE}/login?error=auth_failed`);
   }
 });

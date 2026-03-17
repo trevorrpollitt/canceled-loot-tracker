@@ -13,7 +13,7 @@ const DIFFICULTY_ORDER = ['Mythic', 'Heroic', 'Normal'];
 
 const CLASS_SPECS = {
   'Death Knight':  ['Blood DK', 'Frost DK', 'Unholy DK'],
-  'Demon Hunter':  ['Havoc DH', 'Vengeance DH'],
+  'Demon Hunter':  ['Havoc DH', 'Vengeance DH', 'Devourer DH'],
   'Druid':         ['Balance Druid', 'Feral Druid', 'Guardian Druid', 'Resto Druid'],
   'Evoker':        ['Devastation Evoker', 'Augmentation Evoker', 'Preservation Evoker'],
   'Hunter':        ['BM Hunter', 'MM Hunter', 'SV Hunter'],
@@ -26,6 +26,53 @@ const CLASS_SPECS = {
   'Warlock':       ['Affliction Lock', 'Demo Lock', 'Destro Lock'],
   'Warrior':       ['Arms Warrior', 'Fury Warrior', 'Prot Warrior'],
 };
+
+const CLASS_COLORS = {
+  'Death Knight': '#C41E3A',
+  'Demon Hunter': '#A330C9',
+  'Druid':        '#FF7C0A',
+  'Evoker':       '#33937F',
+  'Hunter':       '#AAD372',
+  'Mage':         '#3FC7EB',
+  'Monk':         '#00FF98',
+  'Paladin':      '#F48CBA',
+  'Priest':       '#FFFFFF',
+  'Rogue':        '#FFF468',
+  'Shaman':       '#0070DD',
+  'Warlock':      '#8788EE',
+  'Warrior':      '#C69B3A',
+};
+
+// Strip the class suffix from spec strings, e.g. "Blood DK" → "Blood", "Balance Druid" → "Balance"
+const shortSpec = (spec) => spec ? spec.replace(/ \S+$/, '') : spec;
+
+const TANK_SPECS   = new Set(['Blood DK', 'Vengeance DH', 'Guardian Druid', 'Brewmaster Monk', 'Prot Paladin', 'Prot Warrior']);
+const HEALER_SPECS = new Set(['Resto Druid', 'Preservation Evoker', 'Mistweaver Monk', 'Holy Paladin', 'Disc Priest', 'Holy Priest', 'Resto Shaman']);
+const RANGED_SPECS = new Set([
+  'Balance Druid', 'Devastation Evoker', 'Augmentation Evoker',
+  'Devourer DH',
+  'BM Hunter', 'MM Hunter',
+  'Arcane Mage', 'Fire Mage', 'Frost Mage',
+  'Shadow Priest', 'Ele Shaman',
+  'Affliction Lock', 'Demo Lock', 'Destro Lock',
+]);
+function displayRole(role, spec) {
+  if (role && role !== 'DPS') return role;
+  if (TANK_SPECS.has(spec))   return 'Tank';
+  if (HEALER_SPECS.has(spec)) return 'Healer';
+  if (RANGED_SPECS.has(spec)) return 'Ranged DPS';
+  return 'Melee DPS';
+}
+
+const ROLE_ORDER = { 'Tank': 0, 'Healer': 1, 'Melee DPS': 2, 'Ranged DPS': 3 };
+function sortByRoleThenName(chars) {
+  return [...chars].sort((a, b) => {
+    const ra = ROLE_ORDER[displayRole(a.role, a.spec)] ?? 99;
+    const rb = ROLE_ORDER[displayRole(b.role, b.spec)] ?? 99;
+    if (ra !== rb) return ra - rb;
+    return a.charName.localeCompare(b.charName);
+  });
+}
 
 const UPGRADE_BADGE = {
   'BIS':      { label: 'BIS',      className: 'badge-bis'     },
@@ -316,19 +363,50 @@ function CharacterDetail({ charName, onClose }) {
 
 // ── Add character form ─────────────────────────────────────────────────────────
 
-function AddCharForm({ onSave, onCancel }) {
-  const [charName, setCharName] = useState('');
-  const [cls, setCls]           = useState('');
-  const [spec, setSpec]         = useState('');
-  const [status, setStatus]     = useState('Active');
-  const [saving, setSaving]     = useState(false);
-  const [error, setError]       = useState(null);
+function AddCharForm({ roster, onSave, onCancel }) {
+  const [charName,  setCharName]  = useState('');
+  const [cls,       setCls]       = useState('');
+  const [spec,      setSpec]      = useState('');
+  const [status,    setStatus]    = useState('Active');
+  const [ownerId,   setOwnerId]   = useState('');
+  const [ownerNick, setOwnerNick] = useState('');
+  const [nickAutoFilled, setNickAutoFilled] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error,  setError]  = useState(null);
 
   const specs = cls ? (CLASS_SPECS[cls] ?? []) : [];
 
   const handleClassChange = (e) => {
     setCls(e.target.value);
     setSpec('');
+  };
+
+  const handleCharNameChange = (e) => {
+    const val = e.target.value;
+    setCharName(val);
+    // Default ownerNick to charName only if it hasn't been manually set or auto-filled
+    if (!nickAutoFilled && !ownerNick) setOwnerNick(val);
+    else if (!nickAutoFilled && ownerNick === charName) setOwnerNick(val);
+  };
+
+  const handleOwnerIdChange = (e) => {
+    const val = e.target.value;
+    setOwnerId(val);
+    // Auto-fill ownerNick from existing roster match
+    const match = roster?.find(c => c.ownerId === val.trim());
+    if (match?.ownerNick) {
+      setOwnerNick(match.ownerNick);
+      setNickAutoFilled(true);
+    } else if (nickAutoFilled) {
+      // Clear auto-fill if ID no longer matches
+      setOwnerNick(charName || '');
+      setNickAutoFilled(false);
+    }
+  };
+
+  const handleOwnerNickChange = (e) => {
+    setOwnerNick(e.target.value);
+    setNickAutoFilled(false);
   };
 
   const handleSubmit = async (e) => {
@@ -341,7 +419,11 @@ function AddCharForm({ onSave, onCancel }) {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
-        body:        JSON.stringify({ charName: charName.trim(), class: cls, spec, status }),
+        body:        JSON.stringify({
+          charName: charName.trim(), class: cls, spec, status,
+          ownerId:   ownerId.trim()   || '',
+          ownerNick: ownerNick.trim() || '',
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? res.status);
@@ -361,7 +443,7 @@ function AddCharForm({ onSave, onCancel }) {
           placeholder="Character name"
           value={charName}
           autoFocus
-          onChange={e => setCharName(e.target.value)}
+          onChange={handleCharNameChange}
           onKeyDown={e => e.key === 'Escape' && onCancel()}
         />
         <select className="add-char-select" value={cls} onChange={handleClassChange}>
@@ -377,6 +459,22 @@ function AddCharForm({ onSave, onCancel }) {
           <option value="Bench">Bench</option>
           <option value="Inactive">Inactive</option>
         </select>
+      </div>
+      <div className="add-char-fields" style={{ marginTop: 8 }}>
+        <input
+          className="roster-player-input"
+          placeholder="Discord ID (optional)"
+          value={ownerId}
+          onChange={handleOwnerIdChange}
+          onKeyDown={e => e.key === 'Escape' && onCancel()}
+        />
+        <input
+          className="roster-player-input"
+          placeholder="Player name (optional)"
+          value={ownerNick}
+          onChange={handleOwnerNickChange}
+          onKeyDown={e => e.key === 'Escape' && onCancel()}
+        />
       </div>
       {error && <div className="error" style={{ marginTop: '8px' }}>{error}</div>}
       <div className="add-char-actions">
@@ -397,6 +495,7 @@ export default function RosterPage() {
   const [error, setError]                   = useState(null);
   const [selectedChar, setSelectedChar]     = useState(null);
   const [showAddForm, setShowAddForm]       = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState(new Set(['Active']));
   const [toggling, setToggling]             = useState(null); // charName being status-toggled
   const [copiedChar, setCopiedChar]         = useState(null); // charName whose Discord ID was just copied
   const [editingOwnerChar, setEditingOwnerChar] = useState(null); // charName whose player name is being edited
@@ -517,9 +616,8 @@ export default function RosterPage() {
     });
   };
 
-  const handleToggleStatus = async (e, char) => {
-    e.stopPropagation(); // don't also trigger row click / detail open
-    const newStatus = char.status === 'Inactive' ? 'Active' : 'Inactive';
+  const handleSetStatus = async (e, char, newStatus) => {
+    e.stopPropagation();
     setToggling(char.charName);
 
     // Optimistic update
@@ -565,6 +663,7 @@ export default function RosterPage() {
 
       {showAddForm && (
         <AddCharForm
+          roster={roster}
           onSave={newChar => {
             // Insert into sorted position: Active/Bench alpha first, Inactive alpha last
             setRoster(prev => {
@@ -582,37 +681,59 @@ export default function RosterPage() {
         />
       )}
 
-      <section className="card">
-        <table className="roster-table">
-          <thead>
-            <tr>
-              <th>Character</th>
-              <th>Spec</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th>Player</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {roster.map(char => (
+      {[
+        { status: 'Active',   dot: 'dot-active',   label: 'Active',   chars: roster.filter(c => c.status === 'Active')   },
+        { status: 'Bench',    dot: 'dot-bench',     label: 'Bench',    chars: roster.filter(c => c.status === 'Bench')    },
+        { status: 'Inactive', dot: 'dot-inactive',  label: 'Inactive', chars: roster.filter(c => c.status === 'Inactive') },
+      ].filter(g => g.chars.length > 0).map(group => {
+        const isExpanded = expandedGroups.has(group.status);
+        const toggle = () => setExpandedGroups(prev => {
+          const next = new Set(prev);
+          next.has(group.status) ? next.delete(group.status) : next.add(group.status);
+          return next;
+        });
+        return (
+          <section key={group.status} className="roster-group">
+            <div className="roster-group-header" onClick={toggle}>
+              <span className="roster-group-chevron">{isExpanded ? '▾' : '▸'}</span>
+              <span className={`roster-count-dot ${group.dot}`} />
+              <span className="roster-group-label">{group.label}</span>
+              <span className="roster-group-count">{group.chars.length}</span>
+            </div>
+            {isExpanded && (
+              <table className="roster-table">
+                <thead>
+                  <tr>
+                    <th>Character</th>
+                    <th>Class</th>
+                    <th>Spec</th>
+                    <th>Role</th>
+                    <th>Player</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortByRoleThenName(group.chars).flatMap((char, i, arr) => {
+                    const role = displayRole(char.role, char.spec);
+                    const prevRole = i > 0 ? displayRole(arr[i - 1].role, arr[i - 1].spec) : null;
+                    const sep = i > 0 && role !== prevRole
+                      ? [<tr key={`sep-${role}`} className="roster-role-sep"><td colSpan={6} /></tr>]
+                      : [];
+                    const row = (
               <tr
                 key={char.charName}
                 className={[
                   'roster-row',
                   selectedChar === char.charName ? 'roster-row-selected' : '',
                   char.status === 'Inactive'     ? 'roster-row-inactive' : '',
+                  char.status === 'Bench'        ? 'roster-row-bench'    : '',
                 ].filter(Boolean).join(' ')}
                 onClick={() => handleRowClick(char.charName)}
               >
                 <td className="roster-col-name">{char.charName}</td>
-                <td>{char.spec}</td>
-                <td className="text-muted">{char.role || '—'}</td>
-                <td>
-                  <span className={`badge ${STATUS_BADGE[char.status] ?? ''}`}>
-                    {char.status}
-                  </span>
-                </td>
+                <td style={{ color: CLASS_COLORS[char.class] ?? 'inherit', fontWeight: CLASS_COLORS[char.class] ? 500 : undefined }}>{char.class || '—'}</td>
+                <td>{shortSpec(char.spec)}</td>
+                <td className="text-muted">{displayRole(char.role, char.spec)}</td>
                 <td className="roster-col-player" onClick={e => e.stopPropagation()}>
                   {!char.ownerId ? (
                     // No Discord link — show warning icon / linking form
@@ -697,25 +818,71 @@ export default function RosterPage() {
                   )}
                 </td>
                 <td className="roster-col-action">
-                  {char.status !== 'Bench' && (
-                    <button
-                      className={`roster-status-btn ${char.status === 'Inactive' ? 'roster-status-btn-activate' : 'roster-status-btn-deactivate'}`}
-                      onClick={e => handleToggleStatus(e, char)}
-                      disabled={toggling === char.charName}
-                      title={char.status === 'Inactive' ? 'Set Active' : 'Set Inactive'}
-                    >
-                      {toggling === char.charName
-                        ? '…'
-                        : char.status === 'Inactive' ? 'Activate' : 'Deactivate'
-                      }
-                    </button>
+                  {char.status === 'Active' && (
+                    <>
+                      <button
+                        className="roster-status-btn roster-status-btn-bench"
+                        onClick={e => handleSetStatus(e, char, 'Bench')}
+                        disabled={toggling === char.charName}
+                      >
+                        {toggling === char.charName ? '…' : 'Bench'}
+                      </button>
+                      <button
+                        className="roster-status-btn roster-status-btn-deactivate"
+                        onClick={e => handleSetStatus(e, char, 'Inactive')}
+                        disabled={toggling === char.charName}
+                      >
+                        Deactivate
+                      </button>
+                    </>
+                  )}
+                  {char.status === 'Bench' && (
+                    <>
+                      <button
+                        className="roster-status-btn roster-status-btn-activate"
+                        onClick={e => handleSetStatus(e, char, 'Active')}
+                        disabled={toggling === char.charName}
+                      >
+                        {toggling === char.charName ? '…' : 'Promote'}
+                      </button>
+                      <button
+                        className="roster-status-btn roster-status-btn-deactivate"
+                        onClick={e => handleSetStatus(e, char, 'Inactive')}
+                        disabled={toggling === char.charName}
+                      >
+                        Deactivate
+                      </button>
+                    </>
+                  )}
+                  {char.status === 'Inactive' && (
+                    <>
+                      <button
+                        className="roster-status-btn roster-status-btn-activate"
+                        onClick={e => handleSetStatus(e, char, 'Active')}
+                        disabled={toggling === char.charName}
+                      >
+                        {toggling === char.charName ? '…' : 'Activate'}
+                      </button>
+                      <button
+                        className="roster-status-btn roster-status-btn-bench"
+                        onClick={e => handleSetStatus(e, char, 'Bench')}
+                        disabled={toggling === char.charName}
+                      >
+                        Bench
+                      </button>
+                    </>
                   )}
                 </td>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+                    );
+                    return [...sep, row];
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+        );
+      })}
 
       {selectedChar && (
         <CharacterDetail

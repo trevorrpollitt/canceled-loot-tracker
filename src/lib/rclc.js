@@ -154,7 +154,7 @@ export function buildLootEntries(rows, roster, responseMap, existingKeys) {
 
     // Map RCLC response label to internal upgrade type
     let upgradeType = 'Non-BIS';
-    const mapped = responseMap.get(responseLabel);
+    const mapped = responseMap.get(responseLabel.toLowerCase());
     if (mapped) {
       upgradeType = mapped.internalType;
     } else {

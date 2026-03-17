@@ -27,7 +27,7 @@ invocation_logs = true
 [vars]
 # Discord vars
 DISCORD_CLIENT_ID = "1481498623416991796"
-DISCORD_GUILD_ID = "901859792602140683"
+DISCORD_GUILD_ID = "1282068816116977695"
 DISCORD_REDIRECT_URI = "https://canceledwow.com/loot/api/auth/callback"
 
 # Web app

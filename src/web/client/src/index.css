@@ -32,48 +32,60 @@ a:hover { color: var(--primary-h); }
 
 .layout { display: flex; flex-direction: column; min-height: 100vh; }
 
-.nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  height: 52px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+.nav-header {
   position: sticky;
   top: 0;
   z-index: 10;
-}
-
-.nav-left   { display: flex; align-items: center; gap: 20px; }
-.nav-brand  { font-weight: 700; font-size: 16px; color: var(--primary); }
-.nav-brand:hover { color: var(--primary-h); }
-.nav-link   { font-size: 13px; color: var(--text-muted); }
-.nav-link:hover, .nav-link.active { color: var(--text); }
-.nav-right  { display: flex; align-items: center; gap: 16px; }
-.nav-user   { color: var(--text-muted); font-size: 13px; }
-.nav-logout { font-size: 13px; }
-
-.team-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 24px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.team-banner-label { font-size: 12px; color: var(--text); text-transform: uppercase; letter-spacing: 0.06em; }
-.team-banner-select {
+
+/* ── Top row: brand | team selector | user/logout ── */
+.nav-top {
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  height: 44px;
+  gap: 16px;
+}
+.nav-brand         { display: flex; align-items: center; flex-shrink: 0; }
+.nav-brand:hover   { opacity: 0.85; }
+.nav-logo          { height: 36px; width: 36px; object-fit: contain; display: block; }
+.nav-team          { display: flex; align-items: center; gap: 10px; }
+.nav-team-label    { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
+.nav-team-select {
   background: var(--surface2);
   border: 1px solid var(--border);
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border-radius: 4px;
   cursor: pointer;
 }
-.team-banner-select:focus { outline: none; border-color: var(--primary); }
+.nav-team-select:disabled { cursor: default; opacity: 0.8; }
+.nav-team-select:focus    { outline: none; border-color: var(--primary); }
+.nav-right  { display: flex; align-items: center; gap: 16px; flex-shrink: 0; margin-left: auto; }
+.nav-user   { color: var(--text-muted); font-size: 13px; }
+.nav-logout { font-size: 13px; }
+
+/* ── Tab row: page nav links ── */
+.nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 20px;
+  border-top: 1px solid var(--border);
+}
+.nav-tab {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.nav-tab:hover        { color: var(--text); }
+.nav-tab.active       { color: var(--text); border-bottom-color: var(--primary); }
 
 .main { flex: 1; padding: 32px 24px; max-width: 960px; margin: 0 auto; width: 100%; }
 
@@ -159,6 +171,21 @@ a:hover { color: var(--primary-h); }
 .loot-import-dropzone:hover { border-color: var(--accent); }
 .loot-import-filename    { font-size: 14px; color: var(--text); }
 .loot-import-placeholder { font-size: 14px; color: var(--text-muted); }
+
+.loot-import-divider {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.loot-import-divider::before,
+.loot-import-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+.loot-import-paste {
+  width: 100%; box-sizing: border-box;
+  background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-family: monospace; font-size: 12px;
+  padding: 10px 12px; resize: vertical;
+}
+.loot-import-paste:focus { outline: none; border-color: var(--accent); }
 
 .loot-import-result       { max-width: 480px; }
 .loot-import-stats        { display: flex; gap: 24px; margin-bottom: 16px; }
@@ -364,6 +391,25 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .badge-status-bench    { background: rgba(234,179,8,0.15);   color: #eab308; border: 1px solid rgba(234,179,8,0.3);   }
 .badge-status-inactive { background: rgba(107,114,128,0.15); color: #9ca3af; border: 1px solid rgba(107,114,128,0.3); }
 
+/* Roster groups */
+.roster-group { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 8px; }
+.roster-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--surface);
+  transition: background 0.1s;
+}
+.roster-group-header:hover { background: rgba(255,255,255,0.04); }
+.roster-group-chevron { font-size: 11px; color: var(--text-muted); width: 10px; }
+.roster-group-label   { font-weight: 600; font-size: 13px; }
+.roster-group-count   { font-size: 12px; color: var(--text-muted); margin-left: 4px; }
+.roster-row-bench td  { opacity: 0.8; }
+.roster-role-sep td { padding: 0; height: 1px; background: var(--border); border: none; }
+
 /* Roster table */
 .roster-table {
   width: 100%;
@@ -475,6 +521,14 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 }
 .roster-status-btn-activate:hover:not(:disabled) {
   background: rgba(34,197,94,0.22);
+}
+.roster-status-btn-bench {
+  background: rgba(240,192,64,0.1);
+  border-color: rgba(240,192,64,0.35);
+  color: #F0C040;
+}
+.roster-status-btn-bench:hover:not(:disabled) {
+  background: rgba(240,192,64,0.2);
 }
 
 /* Character detail panel */
@@ -1003,7 +1057,9 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .review-compare-cell-request { color: var(--text); font-weight: 500; }
 
 .review-arrow-row  { /* label col spacer — intentionally empty */ }
-.review-arrow-cell { font-size: 11px; color: var(--border); padding: 0; line-height: 1.4; }
+.review-arrow-cell { padding: 2px 0; line-height: 1; text-align: left; padding-left: 25%; }
+.review-arrow-changed { font-size: 22px; font-weight: 900; color: #F0C040; filter: drop-shadow(0 0 4px rgba(240,192,64,0.4)); }
+.review-arrow-same    { font-size: 18px; font-weight: 700; color: var(--border); }
 
 .review-no-change  { font-size: 12px; font-style: italic; color: var(--text-muted); opacity: 0.6; }
 
@@ -1244,6 +1300,8 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .council-toggle-btn:hover  { background: rgba(255,255,255,0.05); color: var(--text); }
 .council-toggle-btn.active { background: rgba(204,16,16,0.12); border-color: var(--primary); color: var(--text); }
 .council-candidate-count { font-size: 12px; color: var(--text-muted); margin-left: 4px; }
+.council-legend { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-muted); margin-left: auto; }
+.council-bench-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #F0C040; margin-left: 5px; vertical-align: middle; flex-shrink: 0; }
 
 /* Candidate table */
 .council-table-wrap { overflow-x: auto; }

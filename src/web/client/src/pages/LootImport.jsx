@@ -2,29 +2,41 @@ import { apiPath } from '../lib/api.js';
 import { useState, useRef } from 'react';
 
 export default function LootImport() {
-  const [file, setFile]       = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult]   = useState(null);
-  const [error, setError]     = useState(null);
+  const [file, setFile]         = useState(null);
+  const [pasteText, setPasteText] = useState('');
+  const [loading, setLoading]   = useState(false);
+  const [result, setResult]     = useState(null);
+  const [error, setError]       = useState(null);
   const inputRef = useRef();
 
   function handleFile(e) {
     const f = e.target.files[0];
     setFile(f ?? null);
+    setPasteText('');
     setResult(null);
     setError(null);
   }
 
+  function handlePaste(e) {
+    setPasteText(e.target.value);
+    setFile(null);
+    if (inputRef.current) inputRef.current.value = '';
+    setResult(null);
+    setError(null);
+  }
+
+  const canSubmit = !!(file || pasteText.trim());
+
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!file) return;
+    if (!canSubmit) return;
 
     setLoading(true);
     setResult(null);
     setError(null);
 
     try {
-      const csvText = await file.text();
+      const csvText = file ? await file.text() : pasteText;
       const res = await fetch(apiPath('/api/loot/import'), {
         method:      'POST',
         credentials: 'include',
@@ -37,8 +49,8 @@ export default function LootImport() {
         setError(data.error ?? 'Import failed.');
       } else {
         setResult(data);
-        // Reset the file input
         setFile(null);
+        setPasteText('');
         if (inputRef.current) inputRef.current.value = '';
       }
     } catch {
@@ -52,7 +64,7 @@ export default function LootImport() {
     <div className="page-content">
       <h1 className="page-title">Import Loot</h1>
       <p className="page-subtitle">
-        Export your session from RCLootCouncil and upload the CSV here.
+        Export your session from RCLootCouncil and upload the CSV file, or paste the CSV text directly.
         Duplicate entries (same character + item + date) are skipped automatically.
       </p>
 
@@ -71,10 +83,23 @@ export default function LootImport() {
           }
         </div>
 
+        <div className="loot-import-divider">
+          <span>or paste CSV text</span>
+        </div>
+
+        <textarea
+          className="loot-import-paste"
+          placeholder="Paste CSV content here…"
+          value={pasteText}
+          onChange={handlePaste}
+          rows={6}
+          spellCheck={false}
+        />
+
         <button
           type="submit"
           className="btn-primary"
-          disabled={!file || loading}
+          disabled={!canSubmit || loading}
         >
           {loading ? 'Importing…' : 'Import'}
         </button>

@@ -435,7 +435,7 @@ export async function getRclcResponseMap(sheetId) {
     const map = new Map();
     for (const r of rows) {
       if (!r[0]) continue;
-      map.set(r[0].trim(), {
+      map.set(r[0].trim().toLowerCase(), {
         internalType: r[1]?.trim() ?? 'Non-BIS',
         counted:      (r[2]?.trim() ?? 'Yes') === 'Yes',
       });

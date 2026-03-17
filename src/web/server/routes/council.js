@@ -130,7 +130,7 @@ router.get('/candidates', async (c) => {
 
     const candidates = [];
     for (const char of roster) {
-      if (char.status !== 'Active') continue;
+      if (char.status === 'Inactive') continue;
       const canonSpec = toCanonical(char.spec);
       const armorType = getArmorType(canonSpec);
       if (!isEligible(item, armorType, canonSpec)) continue;
@@ -162,7 +162,7 @@ router.get('/candidates', async (c) => {
       const acct = acctStats[char.ownerId] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
 
       candidates.push({
-        charName: char.charName, class: char.class, spec: char.spec, role: char.role,
+        charName: char.charName, class: char.class, spec: char.spec, role: char.role, status: char.status,
         bisH: s.bisH, bisM: s.bisM, nonBisH: s.nonBisH, nonBisM: s.nonBisM,
         acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
         raidsAttended: raidsByOwner[char.ownerId] ?? 0,
@@ -231,7 +231,7 @@ router.get('/curio-candidates', async (c) => {
 
     const candidates = [];
     for (const char of roster) {
-      if (char.status !== 'Active') continue;
+      if (char.status === 'Inactive') continue;
       const canonSpec = toCanonical(char.spec);
       const tierSlotsWanted = [];
       for (const slot of TIER_SLOTS) {
@@ -245,7 +245,7 @@ router.get('/curio-candidates', async (c) => {
       const s    = stats[char.charName]    ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       const acct = acctStats[char.ownerId] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       candidates.push({
-        charName: char.charName, class: char.class, spec: char.spec, tierSlotsWanted,
+        charName: char.charName, class: char.class, spec: char.spec, status: char.status, tierSlotsWanted,
         bisH: s.bisH, bisM: s.bisM, nonBisH: s.nonBisH, nonBisM: s.nonBisM,
         acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
         raidsAttended: raidsByOwner[char.ownerId] ?? 0,
