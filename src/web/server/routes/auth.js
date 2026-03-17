@@ -74,12 +74,13 @@ router.get('/callback', async (c) => {
 
     // 4. Fetch guild roles once — used to check officer status across all teams.
     //    guild_id and global_officer_role_id come from the master sheet Global Config.
-    let guildRoles        = [];
-    let globalOfficerRole = null;
+    let guildRoles         = [];
+    let globalOfficerRoles = [];
     try {
       const globalConfig = await getGlobalConfig();
       const guildId      = globalConfig.guild_id || null;
-      globalOfficerRole  = globalConfig.global_officer_role_id || null;
+      globalOfficerRoles = (globalConfig.global_officer_role_id || '')
+        .split('|').map(s => s.trim()).filter(Boolean);
       if (guildId) {
         log.verbose(`[auth] fetching guild member guildId=${guildId} userId=${discordUser.id} botTokenPrefix=${process.env.DISCORD_TOKEN?.slice(0, 10)}…`);
         const memberRes = await fetch(`${DISCORD_API}/guilds/${guildId}/members/${discordUser.id}`, {
@@ -102,7 +103,7 @@ router.get('/callback', async (c) => {
     const teams = userTeams.map(({ team, chars }) => ({
       teamName:    team.name,
       teamSheetId: team.sheetId,
-      isOfficer:   team.officerRoleId ? guildRoles.includes(team.officerRoleId) : false,
+      isOfficer:   team.officerRoleIds.some(id => guildRoles.includes(id)),
       chars:       chars.map(ch => ({ charName: ch.charName, spec: ch.spec, role: ch.role, status: ch.status })),
     }));
 
@@ -113,7 +114,7 @@ router.get('/callback', async (c) => {
     for (const t of teams) {
       log.verbose(`[auth]   team=${t.teamName} isOfficer=${t.isOfficer} chars=[${t.chars.map(ch => ch.charName).join(', ')}]`);
     }
-    const isGlobalOfficer = globalOfficerRole ? guildRoles.includes(globalOfficerRole) : false;
+    const isGlobalOfficer = globalOfficerRoles.some(id => guildRoles.includes(id));
     log.verbose(`[auth] resolved → char=${activeChar?.charName ?? 'none'} spec=${activeChar?.spec ?? 'none'} isOfficer=${activeTeam?.isOfficer ?? false} isGlobalOfficer=${isGlobalOfficer} teams=${teams.length}`);
 
     // 7. Store session

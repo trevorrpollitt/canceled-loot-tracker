@@ -16,6 +16,12 @@ import { log } from './logger.js';
 // In-memory team registry — populated by initTeams() at startup.
 const TEAMS = {};
 
+/** Parse a pipe-separated role ID string into a trimmed array of non-empty IDs. */
+function parseRoleIds(value) {
+  if (!value) return [];
+  return value.split('|').map(s => s.trim()).filter(Boolean);
+}
+
 // ── Startup initialisation ────────────────────────────────────────────────────
 
 /**
@@ -27,8 +33,8 @@ const TEAMS = {};
  * Config keys read from each team's sheet:
  *   console_channel_id — #raid-console channel where panels are posted
  *   brief_channel_id   — pre-raid brief channel
- *   officer_role_id    — Discord role ID for officers
- *   team_role_id       — Discord role ID for team members
+ *   officer_role_id    — Discord role ID(s) for officers (pipe-separated for multiple)
+ *   team_role_id       — Discord role ID(s) for team members (pipe-separated for multiple)
  *
  * guild_id is NOT loaded here — it lives in the master sheet Global Config tab
  * and is read directly by auth.js via getGlobalConfig().
@@ -59,8 +65,8 @@ export async function initTeams() {
       sheetId,
       consoleChannelId: null,
       briefChannelId:   null,
-      officerRoleId:    null,
-      memberRoleId:     null,
+      officerRoleIds:   [],
+      memberRoleIds:    [],
     };
   }
 
@@ -70,9 +76,9 @@ export async function initTeams() {
       const config = await getConfig(team.sheetId);
       team.consoleChannelId = config.console_channel_id || null;
       team.briefChannelId   = config.brief_channel_id   || null;
-      team.officerRoleId    = config.officer_role_id     || null;
-      team.memberRoleId     = config.team_role_id        || null;
-      log.verbose(`[teams] Loaded config for team "${team.name}" — officerRole=${team.officerRoleId} memberRole=${team.memberRoleId}`);
+      team.officerRoleIds   = parseRoleIds(config.officer_role_id);
+      team.memberRoleIds    = parseRoleIds(config.team_role_id);
+      log.verbose(`[teams] Loaded config for team "${team.name}" — officerRoles=[${team.officerRoleIds}] memberRoles=[${team.memberRoleIds}]`);
       log.debug(`[teams] Full config for team "${team.name}"`, config);
     } catch (err) {
       log.error(`[teams] Failed to load config for team "${team.name}":`, err.message);
@@ -88,7 +94,7 @@ export async function initTeams() {
  * Returns the team whose console channel matches, or null if not found.
  *
  * @param {string} channelId
- * @returns {{ name, sheetId, consoleChannelId, briefChannelId, officerRoleId, memberRoleId } | null}
+ * @returns {{ name, sheetId, consoleChannelId, briefChannelId, officerRoleIds, memberRoleIds } | null}
  */
 export function getTeamByChannel(channelId) {
   for (const team of Object.values(TEAMS)) {
