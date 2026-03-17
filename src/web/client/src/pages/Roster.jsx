@@ -65,11 +65,13 @@ function displayRole(role, spec) {
 }
 
 const ROLE_ORDER = { 'Tank': 0, 'Healer': 1, 'Melee DPS': 2, 'Ranged DPS': 3 };
-function sortByRoleThenName(chars) {
+function sortByRoleThenClassThenName(chars) {
   return [...chars].sort((a, b) => {
     const ra = ROLE_ORDER[displayRole(a.role, a.spec)] ?? 99;
     const rb = ROLE_ORDER[displayRole(b.role, b.spec)] ?? 99;
     if (ra !== rb) return ra - rb;
+    const classCompare = (a.class ?? '').localeCompare(b.class ?? '');
+    if (classCompare !== 0) return classCompare;
     return a.charName.localeCompare(b.charName);
   });
 }
@@ -733,7 +735,7 @@ export default function RosterPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortByRoleThenName(group.chars).flatMap((char, i, arr) => {
+                  {sortByRoleThenClassThenName(group.chars).flatMap((char, i, arr) => {
                     const role = displayRole(char.role, char.spec);
                     const prevRole = i > 0 ? displayRole(arr[i - 1].role, arr[i - 1].spec) : null;
                     const sep = i > 0 && role !== prevRole
