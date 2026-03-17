@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import { useMe, refreshMe } from '../hooks/useMe.js';
 import ItemLink from '../components/ItemLink.jsx';
@@ -18,36 +18,53 @@ const UPGRADE_BADGE = {
   'BIS':      { label: 'BIS',      className: 'badge-bis'      },
   'Non-BIS':  { label: 'Non-BIS',  className: 'badge-nonbis'   },
   'Tertiary': { label: 'Tertiary', className: 'badge-tertiary'  },
+  'Offspec':  { label: 'Offspec',  className: 'badge-offspec'   },
 };
+
+const SLOT_GROUPS = [
+  { label: 'Tier',        slots: ['Head', 'Shoulders', 'Chest', 'Hands', 'Legs'] },
+  { label: 'Other Armor', slots: ['Wrists', 'Waist', 'Feet'] },
+  { label: 'Accessories', slots: ['Neck', 'Back', 'Ring 1', 'Ring 2', 'Trinket 1', 'Trinket 2'] },
+  { label: 'Weapons',     slots: ['Weapon', 'Off-Hand'] },
+];
 
 // ── Loot section ──────────────────────────────────────────────────────────────
 
 function LootSummary({ loot }) {
-  const counted  = loot.filter(e => e.upgradeType !== 'Tertiary');
-  const tertiary = loot.filter(e => e.upgradeType === 'Tertiary');
-
   const byDiff = Object.fromEntries(
-    DIFFICULTY_ORDER.map(d => [d, counted.filter(e => e.difficulty === d)])
+    DIFFICULTY_ORDER.map(d => [d, loot.filter(e => e.difficulty === d)])
   );
 
-  const anyData = DIFFICULTY_ORDER.some(d => byDiff[d].length > 0) || tertiary.length > 0;
+  const anyData = DIFFICULTY_ORDER.some(d => byDiff[d].length > 0);
   if (!anyData) return null;
+
+  const AWARD_TYPES = [
+    { type: 'BIS',      label: 'BIS',      cls: 'loot-badge-bis'      },
+    { type: 'Non-BIS',  label: 'Non-BIS',  cls: 'loot-badge-nonbis'   },
+    { type: 'Tertiary', label: 'Tertiary', cls: 'loot-badge-tertiary'  },
+  ];
 
   return (
     <div className="loot-summary">
-      {DIFFICULTY_ORDER.map(d => byDiff[d].length > 0 && (
-        <div key={d} className="summary-block">
-          <span className="summary-label">{d[0]}</span>
-          <span className="summary-bis">{byDiff[d].filter(e => e.upgradeType === 'BIS').length} BIS</span>
-          <span className="summary-nonbis">{byDiff[d].filter(e => e.upgradeType === 'Non-BIS').length} Non-BIS</span>
+      {DIFFICULTY_ORDER.filter(d => byDiff[d].length > 0).map(d => (
+        <div key={d} className="loot-summary-card">
+          <div className="loot-summary-card-title">
+            <span>{d}</span>
+            <span className="loot-summary-card-total">Total: {byDiff[d].length}</span>
+          </div>
+          <div className="loot-summary-badges">
+            {AWARD_TYPES.map(({ type, label, cls }) => {
+              const count = byDiff[d].filter(e => e.upgradeType === type).length;
+              if (!count) return null;
+              return (
+                <span key={type} className={`loot-summary-badge ${cls}`}>
+                  {count} {label}
+                </span>
+              );
+            })}
+          </div>
         </div>
       ))}
-      {tertiary.length > 0 && (
-        <div className="summary-block">
-          <span className="summary-label">Tertiary</span>
-          <span className="summary-tertiary">{tertiary.length}</span>
-        </div>
-      )}
     </div>
   );
 }
@@ -131,29 +148,40 @@ function BisTable({ bis, specDefaults, loot }) {
         </tr>
       </thead>
       <tbody>
-        {rows.map(({ slot, overall, overallId, raid, raidId, isPersonal, received }) => (
-          <tr key={slot} className={received ? 'bis-row-received' : ''}>
-            <td className="bis-slot">{slot}</td>
-            <td>
-              <ItemLink
-                name={overall || '—'}
-                itemId={overallId}
-                className={SENTINELS.has(overall) ? 'bis-sentinel' : undefined}
-              />
-              {isPersonal && <span className="badge badge-personal">Personal</span>}
-            </td>
-            <td>
-              <ItemLink
-                name={raid || '—'}
-                itemId={raidId}
-                className={SENTINELS.has(raid) ? 'bis-sentinel' : 'text-muted'}
-              />
-            </td>
-            <td className="bis-check">
-              {received && <span className="bis-received-mark">✓</span>}
-            </td>
-          </tr>
-        ))}
+        {SLOT_GROUPS.map(group => {
+          const groupRows = rows.filter(r => group.slots.includes(r.slot));
+          if (!groupRows.length) return null;
+          return (
+            <Fragment key={group.label}>
+              <tr className="bis-group-header-row">
+                <td colSpan={4} className="bis-group-header">{group.label}</td>
+              </tr>
+              {groupRows.map(({ slot, overall, overallId, raid, raidId, isPersonal, received }) => (
+                <tr key={slot} className={received ? 'bis-row-received' : ''}>
+                  <td className="bis-slot">{slot}</td>
+                  <td>
+                    <ItemLink
+                      name={overall || '—'}
+                      itemId={overallId}
+                      className={SENTINELS.has(overall) ? 'bis-sentinel' : undefined}
+                    />
+                    {isPersonal && <span className="badge badge-personal">Personal</span>}
+                  </td>
+                  <td>
+                    <ItemLink
+                      name={raid || '—'}
+                      itemId={raidId}
+                      className={SENTINELS.has(raid) ? 'bis-sentinel' : 'text-muted'}
+                    />
+                  </td>
+                  <td className="bis-check">
+                    {received && <span className="bis-received-mark">✓</span>}
+                  </td>
+                </tr>
+              ))}
+            </Fragment>
+          );
+        })}
       </tbody>
     </table>
   );
