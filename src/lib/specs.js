@@ -154,7 +154,7 @@ const DUAL_WIELD_SPECS = new Set([
   'Havoc Demon Hunter', 'Vengeance Demon Hunter', 'Devourer Demon Hunter',
   'Assassination Rogue', 'Outlaw Rogue', 'Subtlety Rogue',
   'Enhancement Shaman',
-  'Windwalker Monk', 'Brewmaster Monk',
+  'Windwalker Monk',
   'Frost Death Knight',
   'Fury Warrior',
 ]);
