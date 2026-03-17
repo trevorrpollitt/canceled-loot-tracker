@@ -19,7 +19,7 @@
  *   <Crafted> only applies to Overall BIS.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useMe } from '../hooks/useMe.js';
 import ItemSelect from '../components/ItemSelect.jsx';
 import { apiPath } from '../lib/api.js';
@@ -31,6 +31,13 @@ const STATUS_BADGE = {
   Approved: { label: 'Approved', cls: 'badge-approved' },
   Rejected: { label: 'Rejected', cls: 'badge-rejected' },
 };
+
+const SLOT_GROUPS = [
+  { label: 'Tier',    slots: ['Head', 'Shoulders', 'Chest', 'Hands', 'Legs'] },
+  { label: 'Other Armor',   slots: ['Wrists', 'Waist', 'Feet'] },
+  { label: 'Accessories', slots: ['Back', 'Neck', 'Ring 1', 'Ring 2', 'Trinket 1', 'Trinket 2'] },
+  { label: 'Weapons', slots: ['Weapon', 'Off-Hand'] },
+];
 
 function overallSentinels({ tier, catalyst, crafted }) {
   return [
@@ -58,7 +65,6 @@ function isRaidBisCompatible(value, raidOptions) {
 // and ● when the user has an unsaved change for that specific field.
 
 function FieldIndicator({ isDefault, isDirty }) {
-  if (!isDefault && !isDirty) return null;
   return (
     <span className="bis-field-indicators">
       {isDefault && <span className="bis-indicator-default" title="Matches spec default">★</span>}
@@ -203,7 +209,7 @@ function SlotRow({ slotData, edit, onEdit, onAcknowledge, onResubmit, onReset })
         {/* Raid BIS */}
         <td className="bis-form-cell">
           <div className="bis-field-wrap">
-            <ItemSelect
+            <ItemSelect  
               value={raidBis}
               options={raidOptions}
               sentinels={raidSentinels(sentinels)}
@@ -482,19 +488,19 @@ export default function Bis() {
           Set your best-in-slot items for each slot. Overall BIS is the absolute
           best regardless of source. Raid BIS is the best item from the current
           raid tier only. Submissions go to officers for review.
-          {' '}<span className="bis-legend">
-            <span className="bis-indicator-default">★</span> = spec default
-            {'  '}
-            <span className="item-select-badge-approved">✓</span> = approved
-            {'  '}
-            <span className="item-select-badge-pending">●</span> = pending
-            {'  '}
-            <span className="bis-indicator-dirty">●</span> = unsaved change
-          </span>
         </p>
       </div>
 
       <div className="admin-save-bar">
+        <span className="bis-legend-trigger">
+          ⓘ Legend
+          <span className="bis-legend-tooltip">
+            <span><span className="bis-indicator-default">★</span> = spec default</span>
+            <span><span className="item-select-badge-approved">✓</span> = approved</span>
+            <span><span className="item-select-badge-pending">●</span> = pending</span>
+            <span><span className="bis-indicator-dirty">●</span> = unsaved change</span>
+          </span>
+        </span>
         {saveMsg && <span className="save-msg">{saveMsg}</span>}
         <a className="btn-secondary" href={apiPath('/')}>Cancel</a>
         <button
@@ -518,17 +524,27 @@ export default function Bis() {
             </tr>
           </thead>
           <tbody>
-            {slots.map(slotData => (
-              <SlotRow
-                key={slotData.slot}
-                slotData={slotData}
-                edit={edits[slotData.slot]}
-                onEdit={handleEdit}
-                onAcknowledge={() => handleAcknowledge(slotData.slot)}
-                onResubmit={(note) => handleResubmit(slotData.slot, note)}
-                onReset={handleReset}
-              />
-            ))}
+            {SLOT_GROUPS.map(group => {
+              const groupSlots = slots.filter(s => group.slots.includes(s.slot));
+              if (!groupSlots.length) return null;
+              return (
+                <Fragment key={group.label}>
+                  <tr className="bis-group-header-row">
+                    <td colSpan={5} className="bis-group-header">{group.label}</td>
+                  </tr>
+                  {groupSlots.map(slotData => (
+                    <SlotRow
+                      key={slotData.slot}
+                      slotData={slotData}
+                      edit={edits[slotData.slot]}
+                      onEdit={handleEdit}
+                      onAcknowledge={() => handleAcknowledge(slotData.slot)}
+                      onResubmit={(note) => handleResubmit(slotData.slot, note)}
+                    />
+                  ))}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

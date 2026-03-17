@@ -8,9 +8,10 @@
   --surface2:  #242424;
   --border:    #2E2E2E;
   --primary:   #CC1010;
+  --primary-l: #ff5b5b;
   --primary-h: #E01212;
   --text:      #E8E8E8;
-  --text-muted:#888;
+  --text-muted:#acacac;
   --bis:       #22C55E;
   --nonbis:    #3B82F6;
   --tertiary:  #6B7280;
@@ -31,6 +32,13 @@ a:hover { color: var(--primary-h); }
 /* ── Layout ─────────────────────────────────────────────────────────────────── */
 
 .layout { display: flex; flex-direction: column; min-height: 100vh; }
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--surface);
+}
 
 .nav-header {
   position: sticky;
@@ -904,11 +912,18 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .bis-row-empty td  { opacity: 0.35; }
 
 .admin-save-bar {
+  position: sticky;
+  top: 82px;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 16px;
-  padding: 16px 0;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
 }
 .save-msg  { font-size: 13px; color: var(--bis); }
 
@@ -928,11 +943,84 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 
 /* ── BIS form ───────────────────────────────────────────────────────────────── */
 
+.bis-form-table {
+  width: 100%;
+}
+
 .bis-form-table .bis-slot-col { width: 130px; }
 .bis-form-table th, .bis-form-table td { vertical-align: middle; }
+.bis-form-table thead tr th {
+  position: sticky;
+  top: 134px; /* 82px nav + ~48px save bar */
+  background: var(--surface);
+  z-index: 5;
+  border-bottom: 1px solid var(--border);
+}
 
-.bis-slot-row td { padding: 6px 8px; }
+.bis-slot-row td { 
+  padding: 10px 12px;
+  vertical-align: middle;
+}
+.bis-slot-col {
+  width: 120px;
+  white-space: nowrap;
+}
+
 .bis-slot .badge { margin-left: 6px; }
+
+.bis-group-header {
+  background: var(--surface2);
+  color: var(--primary-l);
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.bis-group-header-row td {
+  padding: .5;
+}
+
+.bis-group-header-row:first-child .bis-group-header {
+  border-top: none;
+}
+
+.bis-legend-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
+  color: var(--text-muted);
+  font-size: 12px;
+  border-bottom: 1px dashed var(--text-muted);
+}
+
+.bis-legend-tooltip {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  bottom: auto;
+  left: 0;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  white-space: nowrap;
+  z-index: 20;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+.bis-legend-trigger:hover .bis-legend-tooltip {
+  display: flex;
+}
 
 /* Status badges */
 .badge-pending  { background: rgba(234,179,8,0.18);  color: #eab308; }
@@ -962,15 +1050,26 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .bis-rationale-cell  { min-width: 180px; }
 .bis-rationale-input {
   width: 100%;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 12px;
-  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 14px;
+  font-style: italic;
+  padding: 4px 0;
+  transition: border-color 0.15s, color 0.15s;
 }
-.bis-rationale-input:focus { outline: none; border-color: var(--accent); }
-.bis-rationale-input::placeholder { color: var(--text-muted); }
+
+.bis-rationale-input:focus {
+  outline: none;
+  border-bottom-color: var(--primary);
+  color: var(--text);
+}
+
+.bis-rationale-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
 
 /* Rejection callout sub-row */
 .bis-rejection-row td { padding: 0 8px 10px; }
@@ -1010,11 +1109,18 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .bis-resubmit-buttons { display: flex; align-items: center; gap: 8px; }
 
 /* Field wrapper — selector + indicators inline */
-.bis-field-wrap { display: flex; align-items: center; gap: 6px; }
+.bis-field-wrap { display: flex; align-items: center; gap: 0; }
 .bis-field-wrap .item-select { flex: 1; min-width: 0; }
 
 /* Per-field indicators */
-.bis-field-indicators   { display: flex; gap: 3px; flex-shrink: 0; }
+.bis-field-indicators {
+  display: inline-flex;
+  align-items: center;
+  width: 16px;
+  min-width: 16px;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
 .bis-indicator-default  { font-size: 12px; color: #2dd4bf; cursor: default; line-height: 1; }
 .bis-indicator-dirty    { font-size: 10px; color: #60a5fa; cursor: default; line-height: 1; }
 
@@ -1036,6 +1142,9 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 
 /* Legend inline in subtitle */
 .bis-legend { margin-left: 8px; white-space: nowrap; }
+.bis-legend-trigger {
+  margin-right: auto;
+}
 
 /* ── BIS Review (officer) ───────────────────────────────────────────────────── */
 
