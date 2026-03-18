@@ -91,31 +91,40 @@ const STATUS_BADGE = {
 // ── Shared sub-components ──────────────────────────────────────────────────────
 
 function LootSummary({ loot }) {
-  const counted  = loot.filter(e => e.upgradeType !== 'Tertiary');
-  const tertiary = loot.filter(e => e.upgradeType === 'Tertiary');
-
   const byDiff = Object.fromEntries(
-    DIFFICULTY_ORDER.map(d => [d, counted.filter(e => e.difficulty === d)])
+    DIFFICULTY_ORDER.map(d => [d, loot.filter(e => e.difficulty === d)])
   );
 
-  const anyData = DIFFICULTY_ORDER.some(d => byDiff[d].length > 0) || tertiary.length > 0;
+  const anyData = DIFFICULTY_ORDER.some(d => byDiff[d].length > 0);
   if (!anyData) return null;
+
+  const AWARD_TYPES = [
+    { type: 'BIS',      label: 'BIS',      cls: 'loot-badge-bis'      },
+    { type: 'Non-BIS',  label: 'Non-BIS',  cls: 'loot-badge-nonbis'   },
+    { type: 'Tertiary', label: 'Tertiary', cls: 'loot-badge-tertiary'  },
+  ];
 
   return (
     <div className="loot-summary">
-      {DIFFICULTY_ORDER.map(d => byDiff[d].length > 0 && (
-        <div key={d} className="summary-block">
-          <span className="summary-label">{d[0]}</span>
-          <span className="summary-bis">{byDiff[d].filter(e => e.upgradeType === 'BIS').length} BIS</span>
-          <span className="summary-nonbis">{byDiff[d].filter(e => e.upgradeType === 'Non-BIS').length} Non-BIS</span>
+      {DIFFICULTY_ORDER.filter(d => byDiff[d].length > 0).map(d => (
+        <div key={d} className="loot-summary-card">
+          <div className="loot-summary-card-title">
+            <span>{d}</span>
+            <span className="loot-summary-card-total">Total: {byDiff[d].length}</span>
+          </div>
+          <div className="loot-summary-badges">
+            {AWARD_TYPES.map(({ type, label, cls }) => {
+              const count = byDiff[d].filter(e => e.upgradeType === type).length;
+              if (!count) return null;
+              return (
+                <span key={type} className={`loot-summary-badge ${cls}`}>
+                  {count} {label}
+                </span>
+              );
+            })}
+          </div>
         </div>
       ))}
-      {tertiary.length > 0 && (
-        <div className="summary-block">
-          <span className="summary-label">Tertiary</span>
-          <span className="summary-tertiary">{tertiary.length}</span>
-        </div>
-      )}
     </div>
   );
 }
@@ -223,21 +232,36 @@ function BisTable({ bis, specDefaults, loot }) {
 // ── Account loot widget ────────────────────────────────────────────────────────
 
 function AccountWidget({ accountChars, accountLoot, currentChar }) {
-  const rows = accountChars.map(char => {
-    const charLoot  = accountLoot.filter(e => e.recipientChar === char);
-    const counted   = charLoot.filter(e => e.upgradeType !== 'Tertiary');
-    const tertiary  = charLoot.filter(e => e.upgradeType === 'Tertiary').length;
-    const byDiff    = Object.fromEntries(
-      DIFFICULTY_ORDER.map(d => [d, counted.filter(e => e.difficulty === d)])
-    );
-    return { char, byDiff, tertiary };
-  });
+  const AWARD_TYPES = [
+    { type: 'BIS',      label: 'B',    cls: 'loot-badge-bis'     },
+    { type: 'Non-BIS',  label: 'NB',   cls: 'loot-badge-nonbis'  },
+    { type: 'Tertiary', label: 'T',    cls: 'loot-badge-tertiary' },
+    { type: 'Offspec',  label: 'OS',   cls: 'loot-badge-offspec'  },
+  ];
 
-  // Totals row
-  const totalByDiff = Object.fromEntries(
-    DIFFICULTY_ORDER.map(d => [d, accountLoot.filter(e => e.upgradeType !== 'Tertiary' && e.difficulty === d)])
+  const byChar = Object.fromEntries(
+    accountChars.map(char => [char, accountLoot.filter(e => e.recipientChar === char)])
   );
-  const totalTertiary = accountLoot.filter(e => e.upgradeType === 'Tertiary').length;
+
+  const activeDiffs = DIFFICULTY_ORDER.filter(d =>
+    accountLoot.some(e => e.difficulty === d)
+  );
+
+  const renderBadges = (loot) => (
+    <div className="account-badge-cell">
+      {AWARD_TYPES.map(({ type, label, cls }) => {
+        const count = loot.filter(e => e.upgradeType === type).length;
+        if (!count) return null;
+        return (
+          <span key={type} className={`loot-summary-badge ${cls}`}>
+            <span className="loot-summary-badge-count">{count}</span>
+            <span className="loot-summary-badge-label">{label}</span>
+          </span>
+        );
+      })}
+      {!loot.length && <span className="text-muted">—</span>}
+    </div>
+  );
 
   return (
     <div className="account-widget">
@@ -246,48 +270,29 @@ function AccountWidget({ accountChars, accountLoot, currentChar }) {
         <thead>
           <tr>
             <th>Character</th>
-            {DIFFICULTY_ORDER.map(d => <th key={d}>{d[0]}</th>)}
-            <th>Tert</th>
+            {activeDiffs.map(d => <th key={d}>{d}</th>)}
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ char, byDiff, tertiary }) => (
+          {accountChars.map(char => (
             <tr key={char} className={char === currentChar ? 'account-row-current' : ''}>
               <td className="account-char-name">{char}</td>
-              {DIFFICULTY_ORDER.map(d => {
-                const bis    = byDiff[d].filter(e => e.upgradeType === 'BIS').length;
-                const nonbis = byDiff[d].filter(e => e.upgradeType === 'Non-BIS').length;
-                return (
-                  <td key={d} className="account-diff-cell">
-                    {bis    > 0 && <span className="summary-bis">{bis}B</span>}
-                    {nonbis > 0 && <span className="summary-nonbis">{nonbis}N</span>}
-                    {bis === 0 && nonbis === 0 && <span className="text-muted">—</span>}
-                  </td>
-                );
-              })}
-              <td className="account-diff-cell">
-                {tertiary > 0 ? <span className="summary-tertiary">{tertiary}</span> : <span className="text-muted">—</span>}
-              </td>
+              {activeDiffs.map(d => (
+                <td key={d}>
+                  {renderBadges(byChar[char].filter(e => e.difficulty === d))}
+                </td>
+              ))}
             </tr>
           ))}
         </tbody>
         <tfoot>
           <tr className="account-row-total">
             <td>Total</td>
-            {DIFFICULTY_ORDER.map(d => {
-              const bis    = totalByDiff[d].filter(e => e.upgradeType === 'BIS').length;
-              const nonbis = totalByDiff[d].filter(e => e.upgradeType === 'Non-BIS').length;
-              return (
-                <td key={d} className="account-diff-cell">
-                  {bis    > 0 && <span className="summary-bis">{bis}B</span>}
-                  {nonbis > 0 && <span className="summary-nonbis">{nonbis}N</span>}
-                  {bis === 0 && nonbis === 0 && <span className="text-muted">—</span>}
-                </td>
-              );
-            })}
-            <td className="account-diff-cell">
-              {totalTertiary > 0 ? <span className="summary-tertiary">{totalTertiary}</span> : <span className="text-muted">—</span>}
-            </td>
+            {activeDiffs.map(d => (
+              <td key={d}>
+                {renderBadges(accountLoot.filter(e => e.difficulty === d))}
+              </td>
+            ))}
           </tr>
         </tfoot>
       </table>
