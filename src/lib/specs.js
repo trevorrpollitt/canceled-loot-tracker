@@ -141,7 +141,7 @@ export function getArmorType(canonicalSpec) {
  */
 const WEAPON_PROFICIENCY_BY_CLASS = {
   'Death Knight':  new Set(['Axe', 'Two-Handed Axe', 'Mace', 'Two-Handed Mace', 'Sword', 'Two-Handed Sword', 'Polearm']),
-  'Demon Hunter':  new Set(['Warglaive', 'Sword', 'Axe', 'Fist Weapon']),
+  'Demon Hunter':  new Set(['Warglaives', 'Sword', 'Axe', 'Fist Weapon']),
   'Druid':         new Set(['Mace', 'Two-Handed Mace', 'Staff', 'Polearm', 'Dagger', 'Fist Weapon', 'Miscellaneous']),
   'Evoker':        new Set(['Axe', 'Mace', 'Sword', 'Dagger', 'Fist Weapon', 'Miscellaneous']),
   'Hunter':        new Set(['Axe', 'Two-Handed Axe', 'Bow', 'Crossbow', 'Gun', 'Polearm', 'Staff', 'Sword', 'Two-Handed Sword', 'Dagger', 'Fist Weapon']),
