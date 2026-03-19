@@ -64,18 +64,11 @@ router.get('/callback', async (c) => {
     const discordUser = await userRes.json();
     log.verbose(`[auth] Discord user: id=${discordUser.id} username=${discordUser.username}`);
 
-    // 3. Find ALL teams this Discord user belongs to (no early exit)
-    const userTeams = [];
-    for (const team of getAllTeams()) {
-      const roster = await getRoster(team.sheetId);
-      const chars = roster.filter(ch => ch.ownerId === discordUser.id);
-      if (chars.length) userTeams.push({ team, chars });
-    }
-
-    // 4. Fetch guild roles once — used to check officer status across all teams.
+    // 3. Fetch guild roles first — needed to determine officer status before building the teams list.
     //    guild_id and global_officer_role_id come from the master sheet Global Config.
     let guildRoles         = [];
     let globalOfficerRoles = [];
+    let isGlobalOfficer    = false;
     try {
       const globalConfig = await getGlobalConfig();
       const guildId      = globalConfig.guild_id || null;
@@ -97,24 +90,40 @@ router.get('/callback', async (c) => {
     } catch (err) {
       log.warn('[auth] Could not fetch guild roles:', err.message);
     }
+    isGlobalOfficer = globalOfficerRoles.some(id => guildRoles.includes(id));
+
+    // 4. Find ALL teams this Discord user has access to:
+    //    - has characters on the team roster, OR
+    //    - holds the team's officer Discord role (characterless officers), OR
+    //    - is a global officer (gets access to every team regardless of characters)
+    const userTeams = [];
+    for (const team of getAllTeams()) {
+      const roster          = await getRoster(team.sheetId);
+      const chars           = roster.filter(ch => ch.ownerId === discordUser.id);
+      const isOfficerOnTeam = team.officerRoleIds.some(id => guildRoles.includes(id));
+      if (chars.length || isOfficerOnTeam || isGlobalOfficer) {
+        userTeams.push({ team, chars });
+      }
+    }
 
     // 5. Build the teams array with per-team officer status.
-    //    officerRoleId is already loaded into the in-memory team object by initTeams().
+    //    officerRoleIds are already loaded into the in-memory team object by initTeams().
+    //    Global officers are officers on every team they appear in.
     const teams = userTeams.map(({ team, chars }) => ({
       teamName:    team.name,
       teamSheetId: team.sheetId,
-      isOfficer:   team.officerRoleIds.some(id => guildRoles.includes(id)),
+      isOfficer:   isGlobalOfficer || team.officerRoleIds.some(id => guildRoles.includes(id)),
       chars:       chars.map(ch => ({ charId: ch.charId, charName: ch.charName, spec: ch.spec, role: ch.role, status: ch.status })),
     }));
 
     // 6. Active team defaults to first match; active character to first char in that team.
+    //    Characterless officers will have activeChar = null; officer pages still work.
     const activeTeam = teams[0] ?? null;
     const activeChar = activeTeam?.chars[0] ?? null;
 
     for (const t of teams) {
       log.verbose(`[auth]   team=${t.teamName} isOfficer=${t.isOfficer} chars=[${t.chars.map(ch => ch.charName).join(', ')}]`);
     }
-    const isGlobalOfficer = globalOfficerRoles.some(id => guildRoles.includes(id));
     log.verbose(`[auth] resolved → char=${activeChar?.charName ?? 'none'} spec=${activeChar?.spec ?? 'none'} isOfficer=${activeTeam?.isOfficer ?? false} isGlobalOfficer=${isGlobalOfficer} teams=${teams.length}`);
 
     // 7. Store session
