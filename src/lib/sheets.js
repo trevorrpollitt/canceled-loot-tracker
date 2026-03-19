@@ -19,6 +19,7 @@
  *   Production → GOOGLE_SERVICE_ACCOUNT_KEY_JSON is set directly in the environment
  */
 
+import { randomUUID } from 'node:crypto';
 import { log } from './logger.js';
 
 // ── Auth — Web Crypto JWT (works in Cloudflare Workers and Node.js 18+) ────────
@@ -271,8 +272,10 @@ function normalizeSheetDate(val) {
 // Column order must match the sheet schema in CLAUDE.md exactly.
 
 /**
- * Roster tab  (A=CharName B=Class C=Spec D=Role E=Status F=OwnerId G=OwnerNick)
+ * Roster tab  (A=CharName B=Class C=Spec D=Role E=Status F=OwnerId G=OwnerNick H=CharId)
  *
+ * CharId (col H) is a UUID appended to every row — stable across renames.
+ * Cols A–G are unchanged from the old schema; old prod code reading A:G is unaffected.
  * Note: Role (col D) is computed by an Apps Script onEdit trigger — never write to it.
  *
  * @param {string} sheetId
@@ -281,7 +284,7 @@ function normalizeSheetDate(val) {
 export async function getRoster(sheetId) {
   log.verbose(`[sheets] getRoster (sheet ${sheetId.slice(-6)})`);
   return cachedRead(sheetId, 'roster', async () => {
-    const rows = await readRange(sheetId, 'Roster!A2:G');
+    const rows = await readRange(sheetId, 'Roster!A2:I');
     return rows
       .map(r => ({
         charName:  String(r[0] ?? '').trim(),
@@ -291,6 +294,8 @@ export async function getRoster(sheetId) {
         status:    String(r[4] ?? '').trim(),
         ownerId:   String(r[5] ?? '').trim(),
         ownerNick: String(r[6] ?? '').trim(),
+        charId:    String(r[7] ?? '').trim(), // col H — empty until migration runs
+        server:    String(r[8] ?? '').trim(), // col I — optional, for same-name disambiguation
       }))
       .filter(c => c.charName && c.status.toLowerCase() !== 'deleted');
   });
@@ -309,7 +314,7 @@ export async function setOwnerNick(sheetId, ownerId, ownerNick) {
   const rows    = await readRange(sheetId, 'Roster!A2:G');
   const updates = [];
   for (let i = 0; i < rows.length; i++) {
-    if ((rows[i][5] ?? '') === ownerId) {
+    if (String(rows[i][5] ?? '') === ownerId) {
       updates.push({ range: `Roster!G${i + 2}`, values: [[ownerNick]] });
     }
   }
@@ -328,13 +333,15 @@ export async function setOwnerNick(sheetId, ownerId, ownerNick) {
  * @param {string} ownerId    Discord user ID snowflake
  * @param {string} ownerNick  Display name (may be empty string)
  */
-export async function setRosterOwner(sheetId, charName, ownerId, ownerNick) {
-  log.verbose(`[sheets] setRosterOwner char="${charName}" ownerId=${ownerId} (sheet ${sheetId.slice(-6)})`);
-  const rows = await readRange(sheetId, 'Roster!A2:G');
-  const idx  = rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
-  if (idx < 0) throw new Error(`Character "${charName}" not found in roster`);
+export async function setRosterOwner(sheetId, charName, ownerId, ownerNick, charId = null) {
+  log.verbose(`[sheets] setRosterOwner char="${charName}" charId=${charId} ownerId=${ownerId} (sheet ${sheetId.slice(-6)})`);
+  const rows = await readRange(sheetId, 'Roster!A2:I');
+  const idx  = charId
+    ? rows.findIndex(r => String(r[7] ?? '') === charId)   // prefer stable charId (col H)
+    : rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
+  if (idx < 0) throw new Error(`Character "${charId ?? charName}" not found in roster`);
   const rowNum = idx + 2;
-  log.debug(`[sheets] setRosterOwner found "${charName}" at row ${rowNum}`);
+  log.debug(`[sheets] setRosterOwner found at row ${rowNum}`);
   await writeRange(sheetId, `Roster!F${rowNum}:G${rowNum}`, [[ownerId, ownerNick ?? '']]);
   cacheInvalidate(sheetId, 'roster');
 }
@@ -347,19 +354,22 @@ export async function setRosterOwner(sheetId, charName, ownerId, ownerNick) {
  * @param {string} charName
  * @param {string} status
  */
-export async function setRosterStatus(sheetId, charName, status) {
-  log.verbose(`[sheets] setRosterStatus char="${charName}" status="${status}" (sheet ${sheetId.slice(-6)})`);
-  const rows = await readRange(sheetId, 'Roster!A2:E');
-  const idx  = rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
-  if (idx < 0) throw new Error(`Character "${charName}" not found in roster`);
-  const rowNum = idx + 2; // +1 for 1-indexed, +1 for header
-  log.debug(`[sheets] setRosterStatus found "${charName}" at row ${rowNum}`);
+export async function setRosterStatus(sheetId, charName, status, charId = null) {
+  log.verbose(`[sheets] setRosterStatus char="${charName}" charId=${charId} status="${status}" (sheet ${sheetId.slice(-6)})`);
+  const rows = await readRange(sheetId, 'Roster!A2:I');
+  const idx  = charId
+    ? rows.findIndex(r => String(r[7] ?? '') === charId)   // prefer stable charId (col H)
+    : rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
+  if (idx < 0) throw new Error(`Character "${charId ?? charName}" not found in roster`);
+  const rowNum = idx + 2;
+  log.debug(`[sheets] setRosterStatus found at row ${rowNum}`);
   await writeRange(sheetId, `Roster!E${rowNum}`, [[status]]);
   cacheInvalidate(sheetId, 'roster');
 }
 
 /**
- * Append a new character row to the Roster tab.
+ * Append a new character row to the Roster tab. Generates a stable UUID (charId)
+ * written to col H so the character can be renamed without breaking linked data.
  * Role is derived from spec here because the onEdit Apps Script trigger
  * only fires on manual sheet edits, not API writes.
  *
@@ -369,29 +379,74 @@ export async function setRosterStatus(sheetId, charName, status) {
  * @param {string} spec      e.g. "Blood DK"
  * @param {string} role      e.g. "Tank" (pre-computed by caller)
  * @param {string} status    "Active" | "Bench" | "Inactive"
+ * @returns {string} The generated charId
  */
-export async function addRosterChar(sheetId, charName, cls, spec, role, status) {
-  log.verbose(`[sheets] addRosterChar char="${charName}" class="${cls}" spec="${spec}" role="${role}" status="${status}" (sheet ${sheetId.slice(-6)})`);
-  await appendRows(sheetId, 'Roster!A:G', [[charName, cls, spec, role, status, '', '']]);
+export async function addRosterChar(sheetId, charName, cls, spec, role, status, server = '') {
+  const charId = randomUUID();
+  log.verbose(`[sheets] addRosterChar charId=${charId} char="${charName}" server="${server}" class="${cls}" spec="${spec}" role="${role}" status="${status}" (sheet ${sheetId.slice(-6)})`);
+  await appendRows(sheetId, 'Roster!A:I', [[charName, cls, spec, role, status, '', '', charId, server]]);
+  cacheInvalidate(sheetId, 'roster');
+  return charId;
+}
+
+/**
+ * Rename a character in the Roster tab (column A).
+ * Because all linked data (BIS, loot) is keyed by charId (col H), this is the only
+ * write needed — no cascading updates to other tabs required.
+ *
+ * @param {string} sheetId
+ * @param {string} charId   Stable UUID from col H
+ * @param {string} newName  New character name
+ */
+export async function renameRosterChar(sheetId, charId, newName) {
+  log.verbose(`[sheets] renameRosterChar charId=${charId} newName="${newName}" (sheet ${sheetId.slice(-6)})`);
+  const rows = await readRange(sheetId, 'Roster!A2:I');
+  const idx  = rows.findIndex(r => String(r[7] ?? '') === charId); // col H (index 7)
+  if (idx < 0) throw new Error(`Character ID "${charId}" not found in roster`);
+  const rowNum = idx + 2;
+  log.debug(`[sheets] renameRosterChar found charId at row ${rowNum}, writing new name "${newName}"`);
+  await writeRange(sheetId, `Roster!A${rowNum}`, [[newName]]); // col A
+  cacheInvalidate(sheetId, 'roster');
+}
+
+/**
+ * Set the Server (column I) for a specific character, identified by charId.
+ * Used when resolving a same-name conflict between two characters.
+ *
+ * @param {string} sheetId
+ * @param {string} charId   Stable UUID from col H
+ * @param {string} server   Server name (e.g. "Area52"), or '' to clear
+ */
+export async function setRosterServer(sheetId, charId, server) {
+  log.verbose(`[sheets] setRosterServer charId=${charId} server="${server}" (sheet ${sheetId.slice(-6)})`);
+  const rows = await readRange(sheetId, 'Roster!A2:I');
+  const idx  = rows.findIndex(r => String(r[7] ?? '') === charId); // col H (index 7)
+  if (idx < 0) throw new Error(`Character ID "${charId}" not found in roster`);
+  const rowNum = idx + 2;
+  log.debug(`[sheets] setRosterServer found charId at row ${rowNum}, writing server "${server}"`);
+  await writeRange(sheetId, `Roster!I${rowNum}`, [[server]]); // col I
   cacheInvalidate(sheetId, 'roster');
 }
 
 /**
  * Soft-delete a character from the Roster tab.
- * Renames charName → "<name>-DELETED" (avoids future name conflicts) and sets
- * Status → "Deleted" so getRoster filters it out.
+ * Appends "-DELETED" to the name (visual indicator) and sets Status → "Deleted"
+ * so getRoster filters it out.
  *
  * @param {string} sheetId
  * @param {string} charName
  */
-export async function deleteRosterChar(sheetId, charName) {
-  log.verbose(`[sheets] deleteRosterChar char="${charName}" (sheet ${sheetId.slice(-6)})`);
-  const rows = await readRange(sheetId, 'Roster!A2:E');
-  const idx  = rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
-  if (idx < 0) throw new Error(`Character "${charName}" not found in roster`);
-  const rowNum = idx + 2;
+export async function deleteRosterChar(sheetId, charName, charId = null) {
+  log.verbose(`[sheets] deleteRosterChar char="${charName}" charId=${charId} (sheet ${sheetId.slice(-6)})`);
+  const rows = await readRange(sheetId, 'Roster!A2:I');
+  const idx  = charId
+    ? rows.findIndex(r => String(r[7] ?? '') === charId)   // prefer stable charId (col H)
+    : rows.findIndex(r => String(r[0] ?? '').toLowerCase() === charName.toLowerCase());
+  if (idx < 0) throw new Error(`Character "${charId ?? charName}" not found in roster`);
+  const rowNum    = idx + 2;
+  const actualName = String(rows[idx][0] ?? charName); // use name from the actual row
   await batchWriteRanges(sheetId, [
-    { range: `Roster!A${rowNum}`, values: [[`${charName}-DELETED`]] },
+    { range: `Roster!A${rowNum}`, values: [[`${actualName}-DELETED`]] },
     { range: `Roster!E${rowNum}`, values: [['Deleted']] },
   ]);
   cacheInvalidate(sheetId, 'roster');
@@ -399,26 +454,31 @@ export async function deleteRosterChar(sheetId, charName) {
 
 /**
  * Loot Log tab  (A=Id B=RaidId C=Date D=Boss E=ItemName F=Difficulty
- *                G=RecipientId H=RecipientChar I=UpgradeType J=Notes)
+ *                G=RecipientId H=RecipientChar I=UpgradeType J=Notes K=RecipientCharId)
+ *
+ * RecipientCharId (col K) is the stable character UUID — empty for entries written
+ * before the migration ran. Joins use charId if present, fall back to name.
+ *
  * @param {string} sheetId
  * @returns {object[]}
  */
 export async function getLootLog(sheetId) {
   log.verbose(`[sheets] getLootLog (sheet ${sheetId.slice(-6)})`);
   return cachedRead(sheetId, 'lootLog', async () => {
-    const rows = await readRange(sheetId, 'Loot Log!A2:J');
+    const rows = await readRange(sheetId, 'Loot Log!A2:K');
     return rows
       .map(r => ({
-        id:            r[0] ?? '',
-        raidId:        r[1] ?? '',
-        date:          normalizeSheetDate(r[2]),
-        boss:          r[3] ?? '',
-        itemName:      r[4] ?? '',
-        difficulty:    r[5] ?? '',
-        recipientId:   r[6] ?? '',
-        recipientChar: r[7] ?? '',
-        upgradeType:   r[8] ?? '',
-        notes:         r[9] ?? '',
+        id:               r[0] ?? '',
+        raidId:           r[1] ?? '',
+        date:             normalizeSheetDate(r[2]),
+        boss:             r[3] ?? '',
+        itemName:         r[4] ?? '',
+        difficulty:       r[5] ?? '',
+        recipientId:      r[6] ?? '',
+        recipientChar:    r[7] ?? '',
+        upgradeType:      r[8] ?? '',
+        notes:            r[9] ?? '',
+        recipientCharId:  String(r[10] ?? '').trim(), // col K — empty until migration runs
       }))
       .filter(e => e.id);
   });
@@ -427,7 +487,7 @@ export async function getLootLog(sheetId) {
 /**
  * Append entries to the Loot Log.
  * Each entry must have: id, raidId, date, boss, itemName, difficulty,
- *                       recipientId, recipientChar, upgradeType, notes
+ *                       recipientId, recipientChar, upgradeType, notes, recipientCharId
  * @param {string}   sheetId
  * @param {object[]} entries
  */
@@ -438,8 +498,9 @@ export async function appendLootEntries(sheetId, entries) {
   const rows = entries.map(e => [
     e.id, e.raidId, e.date, e.boss, e.itemName,
     e.difficulty, e.recipientId, e.recipientChar, e.upgradeType, e.notes,
+    e.recipientCharId ?? '',
   ]);
-  await appendRows(sheetId, 'Loot Log!A:J', rows);
+  await appendRows(sheetId, 'Loot Log!A:K', rows);
   cacheInvalidate(sheetId, 'lootLog');
 }
 
@@ -509,17 +570,20 @@ export async function setConfigValue(sheetId, key, value) {
 
 /**
  * BIS Submissions tab  (A=Id B=CharName C=Spec D=Slot E=TrueBIS F=RaidBIS
- *                       G=Rationale H=Status I=SubmittedAt J=ReviewedBy K=OfficerNote)
+ *                       G=Rationale H=Status I=SubmittedAt J=ReviewedBy K=OfficerNote
+ *                       L=TrueBISItemId M=RaidBISItemId N=CharId)
+ *
+ * CharId (col N) is appended — stable across renames. Col B (CharName) is kept
+ * for backward compat with old prod code reading A:M. New code joins via charId;
+ * charName is the fallback for un-migrated rows.
+ *
  * @param {string} sheetId
  * @returns {object[]}
  */
 export async function getBisSubmissions(sheetId) {
   log.verbose(`[sheets] getBisSubmissions (sheet ${sheetId.slice(-6)})`);
   return cachedRead(sheetId, 'bisSubmissions', async () => {
-    // Schema: A=Id B=CharName C=Spec D=Slot E=TrueBIS F=RaidBIS G=Rationale
-    //         H=Status I=SubmittedAt J=ReviewedBy K=OfficerNote
-    //         L=TrueBISItemId M=RaidBISItemId
-    const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
+    const rows = await readRange(sheetId, 'BIS Submissions!A2:N');
     return rows
       .map(r => ({
         id:             String(r[0]  ?? '').trim(),
@@ -535,6 +599,7 @@ export async function getBisSubmissions(sheetId) {
         officerNote:    String(r[10] ?? '').trim(),
         trueBisItemId:  String(r[11] ?? '').trim(),
         raidBisItemId:  String(r[12] ?? '').trim(),
+        charId:         String(r[13] ?? '').trim(), // col N — empty until migration runs
       }))
       .filter(r => r.id);
   });
@@ -543,34 +608,37 @@ export async function getBisSubmissions(sheetId) {
 /**
  * Upsert a single BIS submission row.
  *
- * If a row already exists for (charName, slot), the TrueBIS, RaidBIS,
- * Rationale, Status, SubmittedAt, and ItemId columns are updated in place.
- * ReviewedBy and OfficerNote are always preserved.
+ * If a row already exists for (charId, slot) — or (charName, slot) for un-migrated
+ * rows — the TrueBIS, RaidBIS, Rationale, Status, SubmittedAt, and ItemId columns
+ * are updated in place. ReviewedBy and OfficerNote are always preserved.
  * Status is always reset to "Pending" on upsert.
  *
- * Extends the sheet schema with two optional columns:
- *   L = TrueBISItemId   (numeric Wowhead item ID or '')
- *   M = RaidBISItemId
+ * Schema columns: A=Id B=CharName C=Spec D=Slot E=TrueBIS F=RaidBIS G=Rationale
+ *                 H=Status I=SubmittedAt J=ReviewedBy K=OfficerNote
+ *                 L=TrueBISItemId M=RaidBISItemId N=CharId
  */
 export async function upsertBisSubmission(sheetId, {
-  charName, spec, slot,
+  charId, charName, spec, slot,
   trueBis, trueBisItemId,
   raidBis, raidBisItemId,
   rationale,
 }) {
-  log.verbose(`[sheets] upsertBisSubmission char="${charName}" slot="${slot}" trueBis="${trueBis}" raidBis="${raidBis}" (sheet ${sheetId.slice(-6)})`);
-  const rows  = await readRange(sheetId, 'BIS Submissions!A2:K');
+  log.verbose(`[sheets] upsertBisSubmission charId=${charId} char="${charName}" slot="${slot}" trueBis="${trueBis}" raidBis="${raidBis}" (sheet ${sheetId.slice(-6)})`);
+  const rows  = await readRange(sheetId, 'BIS Submissions!A2:N');
   const today = new Date().toISOString().slice(0, 10);
 
-  const idx = rows.findIndex(
-    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() && String(r[3] ?? '').toLowerCase() === slot.toLowerCase()
-  );
+  // Match by charId (col N) if available, fall back to charName (col B) for un-migrated rows
+  const idx = rows.findIndex(r => {
+    const rowCharId   = String(r[13] ?? '');
+    const rowCharName = String(r[1]  ?? '').toLowerCase();
+    const slotMatch   = String(r[3]  ?? '').toLowerCase() === slot.toLowerCase();
+    if (!slotMatch) return false;
+    return charId && rowCharId ? rowCharId === charId : rowCharName === (charName ?? '').toLowerCase();
+  });
 
   if (idx >= 0) {
-    const rowNum = idx + 2; // +1 for 1-indexed, +1 for header
-    log.debug(`[sheets] upsertBisSubmission updating existing row ${rowNum} for "${charName}" slot="${slot}"`);
-    // Update content columns (E–I) and item-ID columns (L–M) separately
-    // so that ReviewedBy (J) and OfficerNote (K) are never overwritten.
+    const rowNum = idx + 2;
+    log.debug(`[sheets] upsertBisSubmission updating existing row ${rowNum} for charId=${charId} slot="${slot}"`);
     await writeRange(sheetId, `BIS Submissions!E${rowNum}:I${rowNum}`, [[
       trueBis   ?? '',
       raidBis   ?? '',
@@ -578,16 +646,16 @@ export async function upsertBisSubmission(sheetId, {
       'Pending',
       today,
     ]]);
-    await writeRange(sheetId, `BIS Submissions!L${rowNum}:M${rowNum}`, [[
-      trueBisItemId ?? '',
-      raidBisItemId ?? '',
-    ]]);
+    await batchWriteRanges(sheetId, [
+      { range: `BIS Submissions!L${rowNum}:M${rowNum}`, values: [[trueBisItemId ?? '', raidBisItemId ?? '']] },
+      { range: `BIS Submissions!N${rowNum}`,            values: [[charId ?? '']] }, // ensure charId is written
+    ]);
   } else {
     const id = `bis-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    log.debug(`[sheets] upsertBisSubmission inserting new row id="${id}" for "${charName}" slot="${slot}"`);
-    await appendRows(sheetId, 'BIS Submissions!A:M', [[
+    log.debug(`[sheets] upsertBisSubmission inserting new row id="${id}" for charId=${charId} slot="${slot}"`);
+    await appendRows(sheetId, 'BIS Submissions!A:N', [[
       id,
-      charName,
+      charName      ?? '',
       spec,
       slot,
       trueBis        ?? '',
@@ -599,6 +667,7 @@ export async function upsertBisSubmission(sheetId, {
       '',                    // officerNote
       trueBisItemId  ?? '',
       raidBisItemId  ?? '',
+      charId         ?? '',
     ]]);
   }
   cacheInvalidate(sheetId, 'bisSubmissions');
@@ -611,7 +680,7 @@ export async function upsertBisSubmission(sheetId, {
  * @param {string} sheetId
  * @param {{ range: string, values: string[][] }[]} updates
  */
-async function batchWriteRanges(sheetId, updates) {
+export async function batchWriteRanges(sheetId, updates) {
   if (!updates.length) return;
   log.verbose(`[sheets] batchWriteRanges ${updates.length} ranges (sheet ${sheetId.slice(-6)})`);
   log.debug(`[sheets] batchWriteRanges ranges:`, updates.map(u => u.range).join(', '));
@@ -630,14 +699,14 @@ async function batchWriteRanges(sheetId, updates) {
  * triggers 429 rate-limiting when saving many slots at once.
  *
  * @param {string} sheetId
- * @param {object[]} updates  Each: { charName, spec, slot, trueBis,
+ * @param {object[]} updates  Each: { charId, charName, spec, slot, trueBis,
  *                              trueBisItemId, raidBis, raidBisItemId, rationale }
  */
 export async function batchUpsertBisSubmissions(sheetId, updates) {
   if (!updates.length) return;
-  log.verbose(`[sheets] batchUpsertBisSubmissions ${updates.length} slots for char="${updates[0]?.charName}" (sheet ${sheetId.slice(-6)})`);
+  log.verbose(`[sheets] batchUpsertBisSubmissions ${updates.length} slots for charId=${updates[0]?.charId} (sheet ${sheetId.slice(-6)})`);
 
-  const rows  = await readRange(sheetId, 'BIS Submissions!A2:K');
+  const rows  = await readRange(sheetId, 'BIS Submissions!A2:N');
   const today = new Date().toISOString().slice(0, 10);
 
   const rangeWrites = [];
@@ -645,29 +714,33 @@ export async function batchUpsertBisSubmissions(sheetId, updates) {
 
   updates.forEach((u, i) => {
     const {
-      charName, spec, slot,
+      charId = '', charName = '', spec, slot,
       trueBis = '', trueBisItemId = '',
       raidBis = '', raidBisItemId = '',
       rationale = '',
     } = u;
 
-    const idx = rows.findIndex(
-      r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() && String(r[3] ?? '').toLowerCase() === slot.toLowerCase()
-    );
+    // Match by charId (col N) if available, fall back to charName (col B) for un-migrated rows
+    const idx = rows.findIndex(r => {
+      const rowCharId   = String(r[13] ?? '');
+      const rowCharName = String(r[1]  ?? '').toLowerCase();
+      const slotMatch   = String(r[3]  ?? '').toLowerCase() === slot.toLowerCase();
+      if (!slotMatch) return false;
+      return charId && rowCharId ? rowCharId === charId : rowCharName === charName.toLowerCase();
+    });
 
     if (idx >= 0) {
       const rowNum = idx + 2;
       log.debug(`[sheets] batchUpsert slot="${slot}" → update row ${rowNum} trueBis="${trueBis}" raidBis="${raidBis}"`);
-      // Two sub-ranges per updated row, batched into a single API call.
-      // J (ReviewedBy) and K (OfficerNote) are intentionally skipped.
       rangeWrites.push(
         { range: `BIS Submissions!E${rowNum}:I${rowNum}`,
           values: [[trueBis, raidBis, rationale, 'Pending', today]] },
         { range: `BIS Submissions!L${rowNum}:M${rowNum}`,
-          values: [[trueBisItemId, raidBisItemId]] }
+          values: [[trueBisItemId, raidBisItemId]] },
+        { range: `BIS Submissions!N${rowNum}`,
+          values: [[charId]] }, // ensure charId is written (backfill for un-migrated updates)
       );
     } else {
-      // Mix index into the ID so two inserts in the same ms still differ
       const id = `bis-${Date.now().toString(36)}-${i.toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
       log.debug(`[sheets] batchUpsert slot="${slot}" → new row id="${id}" trueBis="${trueBis}" raidBis="${raidBis}"`);
       newRows.push([
@@ -676,21 +749,18 @@ export async function batchUpsertBisSubmissions(sheetId, updates) {
         'Pending', today,
         '', '',           // reviewedBy, officerNote
         trueBisItemId, raidBisItemId,
+        charId,           // col N
       ]);
     }
   });
 
-  log.verbose(`[sheets] batchUpsertBisSubmissions: ${rangeWrites.length / 2} updates, ${newRows.length} inserts`);
+  log.verbose(`[sheets] batchUpsertBisSubmissions: ${rangeWrites.length / 3} updates, ${newRows.length} inserts`);
   if (rangeWrites.length) await batchWriteRanges(sheetId, rangeWrites);
   if (newRows.length) {
-    // Use writeRange with explicit row numbers instead of appendRows (:append).
-    // The :append endpoint uses table-detection to find the insert position, which
-    // shifts data right if the sheet's table doesn't start at column A (e.g. A1 is
-    // empty). writeRange bypasses this and always writes to the exact target range.
-    const startRow = rows.length + 2; // data starts at row 2; rows is 0-indexed
+    const startRow = rows.length + 2;
     await writeRange(
       sheetId,
-      `BIS Submissions!A${startRow}:M${startRow + newRows.length - 1}`,
+      `BIS Submissions!A${startRow}:N${startRow + newRows.length - 1}`,
       newRows,
     );
   }
@@ -766,17 +836,20 @@ export async function rejectBisSubmission(sheetId, submissionId, reviewerName, o
  * @param {string} slot
  * @returns {boolean} true if a row was found and cleared
  */
-export async function clearPendingBisSubmission(sheetId, charName, slot) {
-  const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
-  const idx  = rows.findIndex(
-    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() &&
-         String(r[3] ?? '').toLowerCase() === slot.toLowerCase()     &&
-         String(r[7] ?? '').toLowerCase() === 'pending'
-  );
+export async function clearPendingBisSubmission(sheetId, charId, slot, charName) {
+  const rows = await readRange(sheetId, 'BIS Submissions!A2:N');
+  const idx  = rows.findIndex(r => {
+    const rowCharId   = String(r[13] ?? '');
+    const rowCharName = String(r[1]  ?? '').toLowerCase();
+    const slotMatch   = String(r[3]  ?? '').toLowerCase() === slot.toLowerCase();
+    const isPending   = String(r[7]  ?? '').toLowerCase() === 'pending';
+    if (!slotMatch || !isPending) return false;
+    return charId && rowCharId ? rowCharId === charId : rowCharName === (charName ?? '').toLowerCase();
+  });
   if (idx < 0) return false;
 
   const rowNum = idx + 2;
-  await clearRange(sheetId, `BIS Submissions!A${rowNum}:M${rowNum}`);
+  await clearRange(sheetId, `BIS Submissions!A${rowNum}:N${rowNum}`);
   cacheInvalidate(sheetId, 'bisSubmissions');
   return true;
 }
@@ -792,11 +865,15 @@ export async function clearPendingBisSubmission(sheetId, charName, slot) {
  * @param {string} slot
  * @returns {boolean} true if a row was found and updated
  */
-export async function resetBisRaidBisField(sheetId, charName, slot) {
-  const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
-  const idx  = rows.findIndex(
-    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() && String(r[3] ?? '').toLowerCase() === slot.toLowerCase()
-  );
+export async function resetBisRaidBisField(sheetId, charId, slot, charName) {
+  const rows = await readRange(sheetId, 'BIS Submissions!A2:N');
+  const idx  = rows.findIndex(r => {
+    const rowCharId   = String(r[13] ?? '');
+    const rowCharName = String(r[1]  ?? '').toLowerCase();
+    const slotMatch   = String(r[3]  ?? '').toLowerCase() === slot.toLowerCase();
+    if (!slotMatch) return false;
+    return charId && rowCharId ? rowCharId === charId : rowCharName === (charName ?? '').toLowerCase();
+  });
   if (idx < 0) return false;
 
   const rowNum = idx + 2;
@@ -818,15 +895,19 @@ export async function resetBisRaidBisField(sheetId, charName, slot) {
  * @param {string} slot
  * @returns {boolean} true if a row was found and cleared
  */
-export async function clearBisSubmission(sheetId, charName, slot) {
-  const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
-  const idx  = rows.findIndex(
-    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() && String(r[3] ?? '').toLowerCase() === slot.toLowerCase()
-  );
+export async function clearBisSubmission(sheetId, charId, slot, charName) {
+  const rows = await readRange(sheetId, 'BIS Submissions!A2:N');
+  const idx  = rows.findIndex(r => {
+    const rowCharId   = String(r[13] ?? '');
+    const rowCharName = String(r[1]  ?? '').toLowerCase();
+    const slotMatch   = String(r[3]  ?? '').toLowerCase() === slot.toLowerCase();
+    if (!slotMatch) return false;
+    return charId && rowCharId ? rowCharId === charId : rowCharName === (charName ?? '').toLowerCase();
+  });
   if (idx < 0) return false;
 
   const rowNum = idx + 2;
-  await clearRange(sheetId, `BIS Submissions!A${rowNum}:M${rowNum}`);
+  await clearRange(sheetId, `BIS Submissions!A${rowNum}:N${rowNum}`);
   cacheInvalidate(sheetId, 'bisSubmissions');
   return true;
 }
@@ -840,17 +921,20 @@ export async function clearBisSubmission(sheetId, charName, slot) {
  * @param {string} slot
  * @returns {boolean} true if a row was found and cleared
  */
-export async function clearRejectedBisSubmission(sheetId, charName, slot) {
-  const rows = await readRange(sheetId, 'BIS Submissions!A2:M');
-  const idx  = rows.findIndex(
-    r => String(r[1] ?? '').toLowerCase() === charName.toLowerCase() &&
-         String(r[3] ?? '').toLowerCase() === slot.toLowerCase()     &&
-         String(r[7] ?? '').toLowerCase() === 'rejected'
-  );
+export async function clearRejectedBisSubmission(sheetId, charId, slot, charName) {
+  const rows = await readRange(sheetId, 'BIS Submissions!A2:N');
+  const idx  = rows.findIndex(r => {
+    const rowCharId   = String(r[13] ?? '');
+    const rowCharName = String(r[1]  ?? '').toLowerCase();
+    const slotMatch   = String(r[3]  ?? '').toLowerCase() === slot.toLowerCase();
+    const isRejected  = String(r[7]  ?? '').toLowerCase() === 'rejected';
+    if (!slotMatch || !isRejected) return false;
+    return charId && rowCharId ? rowCharId === charId : rowCharName === (charName ?? '').toLowerCase();
+  });
   if (idx < 0) return false;
 
   const rowNum = idx + 2;
-  await clearRange(sheetId, `BIS Submissions!A${rowNum}:M${rowNum}`);
+  await clearRange(sheetId, `BIS Submissions!A${rowNum}:N${rowNum}`);
   cacheInvalidate(sheetId, 'bisSubmissions');
   return true;
 }

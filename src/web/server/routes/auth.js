@@ -104,7 +104,7 @@ router.get('/callback', async (c) => {
       teamName:    team.name,
       teamSheetId: team.sheetId,
       isOfficer:   team.officerRoleIds.some(id => guildRoles.includes(id)),
-      chars:       chars.map(ch => ({ charName: ch.charName, spec: ch.spec, role: ch.role, status: ch.status })),
+      chars:       chars.map(ch => ({ charId: ch.charId, charName: ch.charName, spec: ch.spec, role: ch.role, status: ch.status })),
     }));
 
     // 6. Active team defaults to first match; active character to first char in that team.
@@ -124,6 +124,7 @@ router.get('/callback', async (c) => {
       avatar:      discordUser.avatar,
       teamName:    activeTeam?.teamName    ?? null,
       teamSheetId: activeTeam?.teamSheetId ?? null,
+      charId:      activeChar?.charId      ?? null,
       charName:    activeChar?.charName    ?? null,
       spec:        activeChar?.spec        ?? null,
       role:        activeChar?.role        ?? null,

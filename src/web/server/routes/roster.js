@@ -17,6 +17,7 @@ import {
   getRoster, getLootLog, getBisSubmissions,
   getEffectiveDefaultBis, getItemDb, applyRaidBisInference,
   setRosterStatus, setOwnerNick, setRosterOwner, addRosterChar, deleteRosterChar,
+  renameRosterChar, setRosterServer,
 } from '../../../lib/sheets.js';
 import { toCanonical, CLASS_SPECS } from '../../../lib/specs.js';
 
@@ -65,7 +66,11 @@ router.get('/', async (c) => {
 
 router.post('/', async (c) => {
   const { teamSheetId } = c.get('session').user;
-  const { charName, class: cls, spec, status = 'Active', ownerId = '', ownerNick = '' } = await c.req.json();
+  const {
+    charName, class: cls, spec, status = 'Active', ownerId = '', ownerNick = '',
+    server = '',
+    resolveConflictCharId = '', resolveConflictServer = '',
+  } = await c.req.json();
 
   if (!charName?.trim()) return c.json({ error: 'charName is required' }, 400);
   if (!cls?.trim())      return c.json({ error: 'class is required' }, 400);
@@ -74,18 +79,40 @@ router.post('/', async (c) => {
   if (!['Active', 'Bench', 'Inactive'].includes(status)) return c.json({ error: 'Invalid status' }, 400);
 
   try {
-    const roster = await getRoster(teamSheetId);
-    if (roster.some(r => r.charName.toLowerCase() === charName.trim().toLowerCase())) {
-      return c.json({ error: 'Character already exists on this roster' }, 409);
+    const roster   = await getRoster(teamSheetId);
+    const existing = roster.find(r => r.charName.toLowerCase() === charName.trim().toLowerCase());
+
+    if (existing) {
+      const incomingServer = server.trim();
+      const existingServer = (existing.server ?? '').trim();
+      const alreadyDisambiguated =
+        incomingServer && existingServer &&
+        incomingServer.toLowerCase() !== existingServer.toLowerCase();
+
+      if (alreadyDisambiguated) {
+        // Both chars have distinct servers — no resolution dialog needed, fall through to add
+      } else if (resolveConflictCharId && incomingServer) {
+        // Explicit conflict resolution: set server on existing char, then add new char below
+        await setRosterServer(teamSheetId, resolveConflictCharId, resolveConflictServer.trim());
+      } else {
+        // First attempt at this name — return structured conflict so the UI can ask for servers
+        return c.json({
+          conflict:          true,
+          existingCharId:    existing.charId,
+          existingCharName:  existing.charName,
+          existingServer:    existing.server ?? '',
+        }, 409);
+      }
     }
+
     const role            = specToRole(spec.trim());
     const resolvedOwnerId = ownerId.trim();
     const resolvedNick    = ownerNick.trim();
-    await addRosterChar(teamSheetId, charName.trim(), cls.trim(), spec.trim(), role, status);
+    const charId          = await addRosterChar(teamSheetId, charName.trim(), cls.trim(), spec.trim(), role, status, server.trim());
     if (resolvedOwnerId) {
       await setRosterOwner(teamSheetId, charName.trim(), resolvedOwnerId, resolvedNick);
     }
-    return c.json({ charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: resolvedOwnerId, ownerNick: resolvedNick });
+    return c.json({ charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: resolvedOwnerId, ownerNick: resolvedNick, charId, server: server.trim() });
   } catch (err) {
     console.error('[ROSTER] Add character error:', err);
     return c.json({ error: 'Failed to add character' }, 500);
@@ -128,7 +155,9 @@ router.get('/:charName', async (c) => {
       : [charName];
 
     const loot = lootLog
-      .filter(e => (e.recipientChar ?? '').toLowerCase() === charName.toLowerCase())
+      .filter(e => rosterChar.charId && e.recipientCharId
+        ? e.recipientCharId === rosterChar.charId
+        : (e.recipientChar ?? '').toLowerCase() === charName.toLowerCase())
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .map(e => ({ ...e, itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '' }));
 
@@ -139,7 +168,10 @@ router.get('/:charName', async (c) => {
           .map(e => ({ ...e, itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '' }))
       : [];
 
-    const approvedBis   = bisSubmissions.filter(s => s.charName.toLowerCase() === charName.toLowerCase() && s.status === 'Approved');
+    const approvedBis   = bisSubmissions.filter(s =>
+      s.status === 'Approved' &&
+      (rosterChar.charId && s.charId ? s.charId === rosterChar.charId : s.charName.toLowerCase() === charName.toLowerCase())
+    );
     const canonicalSpec = toCanonical(rosterChar.spec);
     const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
     const specDefaults  = applyRaidBisInference(specRows, itemDb);
@@ -158,10 +190,10 @@ router.get('/:charName', async (c) => {
 router.post('/:charName/owner', async (c) => {
   const { teamSheetId } = c.get('session').user;
   const charName        = c.req.param('charName');
-  const { ownerId, ownerNick = '' } = await c.req.json();
+  const { ownerId, ownerNick = '', charId = null } = await c.req.json();
   if (!ownerId?.trim()) return c.json({ error: 'ownerId is required' }, 400);
   try {
-    await setRosterOwner(teamSheetId, charName, ownerId.trim(), ownerNick.trim());
+    await setRosterOwner(teamSheetId, charName, ownerId.trim(), ownerNick.trim(), charId);
     return c.json({ ok: true, charName, ownerId: ownerId.trim(), ownerNick: ownerNick.trim() });
   } catch (err) {
     console.error('[ROSTER] Set owner error:', err);
@@ -172,8 +204,10 @@ router.post('/:charName/owner', async (c) => {
 router.delete('/:charName/owner', async (c) => {
   const { teamSheetId } = c.get('session').user;
   const charName        = c.req.param('charName');
+  const body            = await c.req.json().catch(() => ({}));
+  const charId          = body?.charId ?? null;
   try {
-    await setRosterOwner(teamSheetId, charName, '', '');
+    await setRosterOwner(teamSheetId, charName, '', '', charId);
     return c.json({ ok: true, charName });
   } catch (err) {
     console.error('[ROSTER] Clear owner error:', err);
@@ -182,12 +216,12 @@ router.delete('/:charName/owner', async (c) => {
 });
 
 router.post('/:charName/status', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const charName        = c.req.param('charName');
-  const { status }      = await c.req.json();
+  const { teamSheetId }       = c.get('session').user;
+  const charName              = c.req.param('charName');
+  const { status, charId = null } = await c.req.json();
   if (!['Active', 'Bench', 'Inactive'].includes(status)) return c.json({ error: 'status must be Active, Bench, or Inactive' }, 400);
   try {
-    await setRosterStatus(teamSheetId, charName, status);
+    await setRosterStatus(teamSheetId, charName, status, charId);
     return c.json({ ok: true, charName, status });
   } catch (err) {
     console.error('[ROSTER] Status update error:', err);
@@ -195,11 +229,63 @@ router.post('/:charName/status', async (c) => {
   }
 });
 
+router.post('/:charName/rename', async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const charName        = c.req.param('charName');
+  const {
+    newName,
+    server = '',
+    resolveConflictCharId = '', resolveConflictServer = '',
+  } = await c.req.json();
+  if (!newName?.trim()) return c.json({ error: 'newName is required' }, 400);
+  try {
+    const roster  = await getRoster(teamSheetId);
+    const target  = roster.find(r => r.charName.toLowerCase() === charName.toLowerCase());
+    if (!target) return c.json({ error: 'Character not found' }, 404);
+    if (!target.charId) return c.json({ error: 'Character has no charId — run the migration script first' }, 409);
+    const conflict = roster.find(r => r.charName.toLowerCase() === newName.trim().toLowerCase() && r.charId !== target.charId);
+    if (conflict) {
+      const incomingServer = server.trim();
+      const conflictServer = (conflict.server ?? '').trim();
+      const alreadyDisambiguated =
+        incomingServer && conflictServer &&
+        incomingServer.toLowerCase() !== conflictServer.toLowerCase();
+
+      if (alreadyDisambiguated) {
+        // Both chars have distinct servers — no resolution dialog needed, fall through
+      } else if (resolveConflictCharId && incomingServer) {
+        // Explicit conflict resolution: set server on existing char + renamed char, then rename
+        await setRosterServer(teamSheetId, resolveConflictCharId, resolveConflictServer.trim());
+        await setRosterServer(teamSheetId, target.charId, incomingServer);
+        await renameRosterChar(teamSheetId, target.charId, newName.trim());
+        return c.json({ ok: true, charId: target.charId, oldName: charName, newName: newName.trim(), server: incomingServer });
+      } else {
+        // First attempt — return structured conflict so the UI can ask for servers
+        return c.json({
+          conflict:         true,
+          existingCharId:   conflict.charId,
+          existingCharName: conflict.charName,
+          existingServer:   conflict.server  ?? '',
+          targetServer:     target.server    ?? '',
+        }, 409);
+      }
+    }
+    await renameRosterChar(teamSheetId, target.charId, newName.trim());
+    await setRosterServer(teamSheetId, target.charId, server.trim());
+    return c.json({ ok: true, charId: target.charId, oldName: charName, newName: newName.trim(), server: server.trim() });
+  } catch (err) {
+    console.error('[ROSTER] Rename error:', err);
+    return c.json({ error: 'Failed to rename character' }, 500);
+  }
+});
+
 router.delete('/:charName', async (c) => {
   const { teamSheetId } = c.get('session').user;
   const charName        = c.req.param('charName');
+  const body            = await c.req.json().catch(() => ({}));
+  const charId          = body?.charId ?? null;
   try {
-    await deleteRosterChar(teamSheetId, charName);
+    await deleteRosterChar(teamSheetId, charName, charId);
     return c.json({ ok: true, charName });
   } catch (err) {
     console.error('[ROSTER] Delete error:', err);

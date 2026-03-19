@@ -88,6 +88,94 @@ const STATUS_BADGE = {
   'Inactive': 'badge-status-inactive',
 };
 
+// ── WoW NA/Oceania realm list ─────────────────────────────────────────────────
+// Source: warcraft.wiki.gg/wiki/Americas_region_realm_list_by_datacenter
+const WOW_NA_SERVERS = [
+  'Aegwynn', 'Aerie Peak', 'Agamaggan', 'Aggramar', 'Akama', 'Alexstrasza', 'Alleria',
+  'Altar of Storms', 'Alterac Mountains', 'Aman\'Thul', 'Andorhal', 'Anetheron',
+  'Anub\'arak', 'Anvilmar', 'Antonidas', 'Arathor', 'Area 52', 'Archimonde', 'Argent Dawn',
+  'Arthas', 'Arygos', 'Auchindoun', 'Azgalor', 'Azjol-Nerub', 'Azralon', 'Azshara',
+  'Azuremyst', 'Baelgun', 'Balnazzar', 'Barthilas', 'Black Dragonflight', 'Blackhand',
+  'Blackrock', 'Blackwater Raiders', 'Blackwing Lair', 'Blade\'s Edge', 'Bladefist',
+  'Bleeding Hollow', 'Blood Furnace', 'Bloodhoof', 'Bloodscalp', 'Bonechewer',
+  'Borean Tundra', 'Boulderfist', 'Bronzebeard', 'Burning Blade', 'Burning Legion',
+  'Caelestrasz', 'Cairne', 'Cenarius', 'Cenarion Circle', 'Cho\'gall', 'Chromaggus',
+  'Coilfang', 'Crushridge', 'Daggerspine', 'Dalaran', 'Dalvengyr', 'Dark Iron',
+  'Darkspear', 'Darrowmere', 'Dath\'Remar', 'Dawnbringer', 'Deathwing', 'Demon Soul',
+  'Dentarg', 'Destromath', 'Dethecus', 'Detheroc', 'Doomhammer', 'Draenor',
+  'Dragonblight', 'Dragonmaw', 'Drak\'Tharon', 'Drak\'thul', 'Draka', 'Drenden',
+  'Dreadmaul', 'Dunemaul', 'Durotan', 'Duskwood', 'Earth\'en Ring', 'Echo Isles',
+  'Eitrigg', 'Eldre\'Thalas', 'Elune', 'Emerald Dream', 'Eonar', 'Eredar', 'Executus',
+  'Exodar', 'Farstriders', 'Feathermoon', 'Fenris', 'Firetree', 'Fizzcrank',
+  'Frostmane', 'Frostmourne', 'Frostwolf', 'Galakrond', 'Gallywix', 'Garithos',
+  'Garona', 'Garrosh', 'Ghostlands', 'Gilneas', 'Gnomeregan', 'Goldrinn', 'Gorefiend',
+  'Gorgonnash', 'Greymane', 'Grizzly Hills', 'Gul\'dan', 'Gundrak', 'Gurubashi',
+  'Hakkar', 'Haomarush', 'Hellscream', 'Hydraxis', 'Hyjal', 'Icecrown', 'Illidan',
+  'Jaedenar', 'Jubei\'Thos', 'Kael\'thas', 'Kalecgos', 'Kargath', 'Kel\'Thuzad',
+  'Khaz Modan', 'Khaz\'goroth', 'Khadgar', 'Kil\'jaeden', 'Kilrogg', 'Kirin Tor',
+  'Korgath', 'Korialstrasz', 'Kul Tiras', 'Laughing Skull', 'Lethon', 'Lightbringer',
+  'Lightning\'s Blade', 'Lightninghoof', 'Llane', 'Lothar', 'Madoran', 'Maelstrom',
+  'Maiev', 'Mal\'Ganis', 'Malorne', 'Malygos', 'Malfurion', 'Mannoroth', 'Medivh',
+  'Misha', 'Mok\'Nathal', 'Moon Guard', 'Moonrunner', 'Mug\'thol', 'Muradin',
+  'Nagrand', 'Nathrezim', 'Nazgrel', 'Nazjatar', 'Nemesis', 'Nesingwary',
+  'Ner\'zhul', 'Nordrassil', 'Norgannon', 'Onyxia', 'Perenolde', 'Proudmoore',
+  'Quel\'Thalas', 'Quel\'dorei', 'Ragnaros', 'Ravencrest', 'Ravenholdt', 'Rexxar',
+  'Rivendare', 'Runetotem', 'Saurfang', 'Sargeras', 'Scarlet Crusade',
+  'Scilla', 'Sen\'jin', 'Sentinels', 'Shadow Council', 'Shadowmoon', 'Shadowsong',
+  'Shandris', 'Shattered Halls', 'Shattered Hand', 'Shu\'halo', 'Silver Hand',
+  'Silvermoon', 'Sisters of Elune', 'Skullcrusher', 'Skywall', 'Smolderthorn',
+  'Spinebreaker', 'Spirestone', 'Staghelm', 'Steamwheedle Cartel', 'Stonemaul',
+  'Stormrage', 'Stormreaver', 'Stormscale', 'Suramar', 'Tanaris', 'Terenas',
+  'Terokkar', 'Thaurissan', 'The Forgotten Coast', 'The Scryers', 'The Underbog',
+  'The Venture Co', 'Thorium Brotherhood', 'Thrall', 'Thunderhorn', 'Thunderlord',
+  'Tichondrius', 'Tol Barad', 'Tortheldrin', 'Trollbane', 'Turalyon', 'Twisting Nether',
+  'Uldum', 'Uldaman', 'Undermine', 'Ursin', 'Uther', 'Vashj', 'Vek\'nilash',
+  'Velen', 'Warsong', 'Whisperwind', 'Wildhammer', 'Windrunner', 'Winterhoof',
+  'Wyrmrest Accord', 'Ysera', 'Ysondre', 'Zangarmarsh', 'Zul\'jin', 'Zuluhed',
+].sort();
+
+// Single shared datalist node — all WowServerSelect instances reference the same list.
+// Rendered once at the bottom of the page tree by RosterPage.
+const SERVER_DATALIST_ID = 'wow-server-list';
+function WowServerDatalist() {
+  return (
+    <datalist id={SERVER_DATALIST_ID}>
+      {WOW_NA_SERVERS.map(s => <option key={s} value={s} />)}
+    </datalist>
+  );
+}
+
+/**
+ * Server name input with datalist autocomplete from the WoW NA realm list.
+ * Falls back gracefully to free text for unlisted realms.
+ */
+function WowServerSelect({ value, onChange, autoFocus = false, placeholder = 'e.g. Area 52', disabled = false }) {
+  const [focused, setFocused] = useState(false);
+  const [draft,   setDraft]   = useState('');
+
+  // When focused: show draft (starts empty so the full dropdown appears immediately).
+  // When blurred: show the parent-controlled value.
+  // This means the user always sees all options on click without having to delete first.
+  const handleFocus = () => { setDraft(''); setFocused(true); };
+  const handleBlur  = () => { setFocused(false); };
+  const handleChange = (e) => { setDraft(e.target.value); onChange(e.target.value); };
+
+  return (
+    <input
+      className="roster-player-input"
+      list={disabled ? undefined : SERVER_DATALIST_ID}
+      placeholder={focused && value ? value : placeholder}
+      value={focused ? draft : value}
+      autoFocus={autoFocus}
+      disabled={disabled}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      onChange={handleChange}
+      style={disabled ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
+    />
+  );
+}
+
 // ── Shared sub-components ──────────────────────────────────────────────────────
 
 function LootSummary({ loot }) {
@@ -381,6 +469,11 @@ function AddCharForm({ roster, onSave, onCancel }) {
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState(null);
 
+  // Server conflict resolution state
+  const [conflictData,    setConflictData]    = useState(null); // { existingCharId, existingCharName }
+  const [newServer,       setNewServer]       = useState('');
+  const [existingServer,  setExistingServer]  = useState('');
+
   const specs = cls ? (CLASS_SPECS[cls] ?? []) : [];
 
   const handleClassChange = (e) => {
@@ -416,9 +509,7 @@ function AddCharForm({ roster, onSave, onCancel }) {
     setNickAutoFilled(false);
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!charName.trim() || !cls || !spec) return;
+  const doSubmit = async ({ server = '', resolveConflictCharId = '', resolveConflictServer = '' } = {}) => {
     setSaving(true);
     setError(null);
     try {
@@ -430,9 +521,24 @@ function AddCharForm({ roster, onSave, onCancel }) {
           charName: charName.trim(), class: cls, spec, status,
           ownerId:   ownerId.trim()   || '',
           ownerNick: ownerNick.trim() || '',
+          server,
+          resolveConflictCharId,
+          resolveConflictServer,
         }),
       });
       const body = await res.json();
+      if (res.status === 409 && body.conflict) {
+        // Name collision — prompt for server names
+        setConflictData({
+          existingCharId:      body.existingCharId,
+          existingCharName:    body.existingCharName,
+          existingServerLocked: !!body.existingServer,
+        });
+        setNewServer('');
+        setExistingServer(body.existingServer ?? '');
+        setSaving(false);
+        return;
+      }
       if (!res.ok) throw new Error(body.error ?? res.status);
       onSave(body);
     } catch (err) {
@@ -440,6 +546,66 @@ function AddCharForm({ roster, onSave, onCancel }) {
       setSaving(false);
     }
   };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!charName.trim() || !cls || !spec) return;
+    await doSubmit();
+  };
+
+  const handleResolveConflict = async () => {
+    if (!newServer.trim() || !existingServer.trim()) return;
+    await doSubmit({
+      server:               newServer.trim(),
+      resolveConflictCharId: conflictData.existingCharId,
+      resolveConflictServer: existingServer.trim(),
+    });
+    setConflictData(null);
+  };
+
+  if (conflictData) {
+    return (
+      <div className="add-char-form card">
+        <h3 className="card-title">Resolve Name Conflict</h3>
+        <p className="modal-body" style={{ marginBottom: 12 }}>
+          A character named <strong>{charName.trim()}</strong> already exists on this roster.
+          Enter a server name for each to tell them apart.
+        </p>
+        <div className="add-char-fields" style={{ flexDirection: 'column', gap: 8 }}>
+          <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            Server for existing <strong>{conflictData.existingCharName}</strong>
+          </label>
+          <WowServerSelect
+            value={existingServer}
+            onChange={setExistingServer}
+            autoFocus={!conflictData.existingServerLocked}
+            disabled={conflictData.existingServerLocked}
+          />
+          <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 4 }}>
+            Server for new <strong>{charName.trim()}</strong>
+          </label>
+          <WowServerSelect
+            value={newServer}
+            onChange={setNewServer}
+            autoFocus={conflictData.existingServerLocked}
+          />
+        </div>
+        {error && <div className="error" style={{ marginTop: '8px' }}>{error}</div>}
+        <div className="add-char-actions">
+          <button
+            type="button"
+            className="btn-primary btn-sm"
+            disabled={saving || !newServer.trim() || !existingServer.trim()}
+            onClick={handleResolveConflict}
+          >
+            {saving ? 'Saving…' : 'Resolve & Add'}
+          </button>
+          <button type="button" className="btn-sm" onClick={() => setConflictData(null)}>Back</button>
+          <button type="button" className="btn-sm" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <form className="add-char-form card" onSubmit={handleSubmit}>
@@ -505,13 +671,24 @@ export default function RosterPage() {
   const [expandedGroups, setExpandedGroups] = useState(new Set(['Active']));
   const [toggling, setToggling]             = useState(null); // charName being status-toggled
   const [copiedChar, setCopiedChar]         = useState(null); // charName whose Discord ID was just copied
-  const [editingOwnerChar, setEditingOwnerChar] = useState(null); // charName whose player name is being edited
-  const [editOwnerValue, setEditOwnerValue] = useState('');
-  const [linkingOwnerChar, setLinkingOwnerChar] = useState(null); // charName being linked to a Discord ID
-  const [linkOwnerIdValue, setLinkOwnerIdValue]   = useState('');
+  const [editingOwnerChar, setEditingOwnerChar]     = useState(null); // charName whose player name is being edited
+  const [editingOwnerCharId, setEditingOwnerCharId] = useState(null); // charId of the char being edited
+  const [editOwnerValue, setEditOwnerValue]         = useState('');
+  const [linkingOwnerChar, setLinkingOwnerChar]     = useState(null); // charName being linked to a Discord ID
+  const [linkingOwnerCharId, setLinkingOwnerCharId] = useState(null); // charId being linked
+  const [linkOwnerIdValue, setLinkOwnerIdValue]     = useState('');
   const [linkOwnerNickValue, setLinkOwnerNickValue] = useState('');
-  const [deleteConfirmChar, setDeleteConfirmChar] = useState(null); // charName pending delete confirmation
+  const [deleteConfirmChar, setDeleteConfirmChar]   = useState(null); // charName pending delete confirmation
+  const [deleteConfirmCharId, setDeleteConfirmCharId] = useState(null); // charId pending delete confirmation
   const [deleting, setDeleting]                   = useState(null); // charName being deleted
+  const [renamingChar, setRenamingChar]           = useState(null); // charName being renamed
+  const [renameValue,  setRenameValue]            = useState('');
+  const [renameConflict, setRenameConflict]       = useState(null); // { charName, newName, existingCharId, existingCharName }
+  const [renameConflictNewServer,      setRenameConflictNewServer]      = useState('');
+  const [renameConflictExistingServer, setRenameConflictExistingServer] = useState('');
+  const [renameServerValue, setRenameServerValue] = useState('');
+  const [renameSaving, setRenameSaving]           = useState(false);
+  const [renameError,  setRenameError]            = useState(null);
 
   useEffect(() => {
     fetch(apiPath('/api/roster'), { credentials: 'include' })
@@ -534,16 +711,18 @@ export default function RosterPage() {
   const handleEditOwner = (e, char) => {
     e.stopPropagation();
     setEditingOwnerChar(char.charName);
+    setEditingOwnerCharId(char.charId);
     setEditOwnerValue(char.ownerNick || '');
   };
 
   const handleSaveOwnerNick = async () => {
     if (!editingOwnerChar) return;
     const trimmed     = editOwnerValue.trim();
-    const char        = roster.find(c => c.charName === editingOwnerChar);
+    const char        = roster.find(c => c.charId === editingOwnerCharId);
     const ownerId     = char?.ownerId;
     const originalNick = char?.ownerNick;
     setEditingOwnerChar(null);
+    setEditingOwnerCharId(null);
     if (!trimmed || !ownerId || trimmed === originalNick) return;
 
     // Optimistic update — all chars sharing this ownerId
@@ -569,14 +748,16 @@ export default function RosterPage() {
 
   const handleSaveLinkOwner = async () => {
     const charName = linkingOwnerChar;
+    const charId   = linkingOwnerCharId;
     const ownerId  = linkOwnerIdValue.trim();
     const nick     = linkOwnerNickValue.trim();
     setLinkingOwnerChar(null);
+    setLinkingOwnerCharId(null);
     if (!charName || !ownerId) return;
 
-    // Optimistic update
+    // Optimistic update — match by charId so same-named chars aren't both updated
     setRoster(prev => prev.map(c =>
-      c.charName === charName ? { ...c, ownerId, ownerNick: nick } : c
+      c.charId === charId ? { ...c, ownerId, ownerNick: nick } : c
     ));
 
     try {
@@ -584,35 +765,38 @@ export default function RosterPage() {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
-        body:        JSON.stringify({ ownerId, ownerNick: nick }),
+        body:        JSON.stringify({ ownerId, ownerNick: nick, charId }),
       });
       if (!res.ok) throw new Error(res.status);
     } catch {
       // Roll back
       setRoster(prev => prev.map(c =>
-        c.charName === charName ? { ...c, ownerId: '', ownerNick: '' } : c
+        c.charId === charId ? { ...c, ownerId: '', ownerNick: '' } : c
       ));
     }
   };
 
   const handleClearOwner = async (e, char) => {
     e.stopPropagation();
-    const { ownerId, ownerNick } = char;
+    const { ownerId, ownerNick, charId } = char;
 
-    // Optimistic update
+    // Optimistic update — match by charId so same-named chars aren't both updated
     setRoster(prev => prev.map(c =>
-      c.charName === char.charName ? { ...c, ownerId: '', ownerNick: '' } : c
+      c.charId === charId ? { ...c, ownerId: '', ownerNick: '' } : c
     ));
 
     try {
       const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(char.charName)}/owner`), {
-        method: 'DELETE', credentials: 'include',
+        method:  'DELETE',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ charId }),
       });
       if (!res.ok) throw new Error(res.status);
     } catch {
       // Roll back
       setRoster(prev => prev.map(c =>
-        c.charName === char.charName ? { ...c, ownerId, ownerNick } : c
+        c.charId === charId ? { ...c, ownerId, ownerNick } : c
       ));
     }
   };
@@ -629,9 +813,9 @@ export default function RosterPage() {
     e.stopPropagation();
     setToggling(char.charName);
 
-    // Optimistic update
+    // Optimistic update — match by charId so same-named chars aren't both updated
     setRoster(prev => prev.map(c =>
-      c.charName === char.charName ? { ...c, status: newStatus } : c
+      c.charId === char.charId ? { ...c, status: newStatus } : c
     ));
 
     try {
@@ -639,33 +823,110 @@ export default function RosterPage() {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
-        body:        JSON.stringify({ status: newStatus }),
+        body:        JSON.stringify({ status: newStatus, charId: char.charId }),
       });
       if (!res.ok) throw new Error(res.status);
     } catch {
       // Roll back on failure
       setRoster(prev => prev.map(c =>
-        c.charName === char.charName ? { ...c, status: char.status } : c
+        c.charId === char.charId ? { ...c, status: char.status } : c
       ));
     } finally {
       setToggling(null);
     }
   };
 
-  const handleDeleteChar = async (charName) => {
+  const doRename = async (charName, newName, { server = '', resolveConflictCharId = '', resolveConflictServer = '' } = {}) => {
+    setRenameSaving(true);
+    setRenameError(null);
+    try {
+      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(charName)}/rename`), {
+        method:      'POST',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+        body:        JSON.stringify({ newName, server, resolveConflictCharId, resolveConflictServer }),
+      });
+      const body = await res.json();
+      if (res.status === 409 && body.conflict) {
+        setRenameConflict({
+          charName,
+          newName,
+          existingCharId:      body.existingCharId,
+          existingCharName:    body.existingCharName,
+          existingServerLocked: !!body.existingServer,
+          targetServerLocked:   !!body.targetServer,
+        });
+        setRenameConflictNewServer(body.targetServer ?? '');
+        setRenameConflictExistingServer(body.existingServer ?? '');
+        setRenameSaving(false);
+        setRenamingChar(null);
+        return;
+      }
+      if (!res.ok) {
+        setRenameError(body.error ?? 'Rename failed');
+        setRenameSaving(false);
+        return;
+      }
+      // Update roster in state — match by charId so same-named chars on different servers aren't all renamed
+      setRoster(prev => prev.map(c =>
+        c.charId === body.charId ? { ...c, charName: newName, server: server.trim() } : c
+      ));
+      if (selectedChar === charName) setSelectedChar(newName);
+      setRenamingChar(null);
+      setRenameValue('');
+      setRenameServerValue('');
+    } catch {
+      setRenameError('Rename failed');
+      setRenameSaving(false);
+    } finally {
+      setRenameSaving(false);
+    }
+  };
+
+  const handleStartRename = (e, char) => {
+    e.stopPropagation();
+    setRenamingChar(char.charName);
+    setRenameValue(char.charName);
+    setRenameServerValue(char.server ?? '');
+    setRenameError(null);
+  };
+
+  const handleSaveRenameModal = async () => {
+    const newName = renameValue.trim();
+    if (!newName || !renamingChar) { setRenamingChar(null); return; }
+    await doRename(renamingChar, newName, { server: renameServerValue });
+  };
+
+  const handleResolveRenameConflict = async () => {
+    if (!renameConflictNewServer.trim() || !renameConflictExistingServer.trim()) return;
+    const { charName, newName, existingCharId } = renameConflict;
+    setRenameConflict(null);
+    await doRename(charName, newName, {
+      server:               renameConflictNewServer.trim(),
+      resolveConflictCharId: existingCharId,
+      resolveConflictServer: renameConflictExistingServer.trim(),
+    });
+  };
+
+  const handleDeleteChar = async (charName, charId) => {
     setDeleting(charName);
     try {
       const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(charName)}`), {
-        method: 'DELETE', credentials: 'include',
+        method:  'DELETE',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ charId }),
       });
       if (!res.ok) throw new Error(res.status);
-      setRoster(prev => prev.filter(c => c.charName !== charName));
+      // Match by charId so same-named chars aren't both removed
+      setRoster(prev => prev.filter(c => c.charId !== charId));
       if (selectedChar === charName) setSelectedChar(null);
     } catch {
       // leave roster unchanged on failure
     } finally {
       setDeleting(null);
       setDeleteConfirmChar(null);
+      setDeleteConfirmCharId(null);
     }
   };
 
@@ -757,7 +1018,23 @@ export default function RosterPage() {
                 ].filter(Boolean).join(' ')}
                 onClick={() => handleRowClick(char.charName)}
               >
-                <td className="roster-col-name">{char.charName}</td>
+                <td className="roster-col-name" onClick={e => e.stopPropagation()}>
+                  <span className="roster-char-name-cell">
+                    <span
+                      className="roster-char-name"
+                      onClick={() => handleRowClick(char.charName)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {char.charName}
+                      {char.server && <span className="roster-server-tag">{char.server}</span>}
+                    </span>
+                    <button
+                      className="roster-edit-btn"
+                      title="Rename / edit server"
+                      onClick={e => handleStartRename(e, char)}
+                    >✎</button>
+                  </span>
+                </td>
                 <td style={{ color: CLASS_COLORS[char.class] ?? 'inherit', fontWeight: CLASS_COLORS[char.class] ? 500 : undefined }}>{char.class || '—'}</td>
                 <td>{shortSpec(char.spec)}</td>
                 <td className="text-muted">{displayRole(char.role, char.spec)}</td>
@@ -804,6 +1081,7 @@ export default function RosterPage() {
                         onClick={e => {
                           e.stopPropagation();
                           setLinkingOwnerChar(char.charName);
+                          setLinkingOwnerCharId(char.charId);
                           setLinkOwnerIdValue('');
                           setLinkOwnerNickValue('');
                         }}
@@ -904,7 +1182,7 @@ export default function RosterPage() {
                   <button
                     className="roster-delete-btn"
                     title="Delete character"
-                    onClick={e => { e.stopPropagation(); setDeleteConfirmChar(char.charName); }}
+                    onClick={e => { e.stopPropagation(); setDeleteConfirmChar(char.charName); setDeleteConfirmCharId(char.charId); }}
                   >✕</button>
                 </td>
               </tr>
@@ -927,7 +1205,7 @@ export default function RosterPage() {
       )}
 
       {deleteConfirmChar && (
-        <div className="modal-backdrop" onClick={() => setDeleteConfirmChar(null)}>
+        <div className="modal-backdrop" onClick={() => { setDeleteConfirmChar(null); setDeleteConfirmCharId(null); }}>
           <div className="modal-dialog" onClick={e => e.stopPropagation()}>
             <h3 className="modal-title">Delete Character</h3>
             <p className="modal-body">
@@ -939,12 +1217,101 @@ export default function RosterPage() {
             <div className="modal-actions">
               <button
                 className="btn-danger"
-                onClick={() => handleDeleteChar(deleteConfirmChar)}
+                onClick={() => handleDeleteChar(deleteConfirmChar, deleteConfirmCharId)}
                 disabled={deleting === deleteConfirmChar}
               >
                 {deleting === deleteConfirmChar ? 'Deleting…' : 'Delete'}
               </button>
-              <button className="btn-secondary" onClick={() => setDeleteConfirmChar(null)}>
+              <button className="btn-secondary" onClick={() => { setDeleteConfirmChar(null); setDeleteConfirmCharId(null); }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <WowServerDatalist />
+
+      {renamingChar && (
+        <div className="modal-backdrop" onClick={() => { setRenamingChar(null); setRenameError(null); }}>
+          <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+            <h3 className="modal-title">Edit Character</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '12px 0' }}>
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Character name</label>
+              <input
+                className="roster-player-input"
+                value={renameValue}
+                autoFocus
+                onChange={e => setRenameValue(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter')  { e.preventDefault(); handleSaveRenameModal(); }
+                  if (e.key === 'Escape') { setRenamingChar(null); setRenameError(null); }
+                }}
+                disabled={renameSaving}
+              />
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                Server <span style={{ fontWeight: 400 }}>(optional — clear to remove)</span>
+              </label>
+              <WowServerSelect
+                value={renameServerValue}
+                onChange={setRenameServerValue}
+              />
+            </div>
+            {renameError && <div className="error" style={{ marginBottom: 8 }}>{renameError}</div>}
+            <div className="modal-actions">
+              <button
+                className="btn-primary"
+                onClick={handleSaveRenameModal}
+                disabled={renameSaving || !renameValue.trim()}
+              >
+                {renameSaving ? 'Saving…' : 'Save'}
+              </button>
+              <button className="btn-secondary" onClick={() => { setRenamingChar(null); setRenameError(null); }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameConflict && (
+        <div className="modal-backdrop" onClick={() => setRenameConflict(null)}>
+          <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+            <h3 className="modal-title">Resolve Name Conflict</h3>
+            <p className="modal-body">
+              A character named <strong>{renameConflict.newName}</strong> already exists on this roster.
+              Enter a server name for each to tell them apart.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '12px 0' }}>
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                Server for existing <strong>{renameConflict.existingCharName}</strong>
+              </label>
+              <WowServerSelect
+                value={renameConflictExistingServer}
+                onChange={setRenameConflictExistingServer}
+                autoFocus={!renameConflict.existingServerLocked}
+                disabled={renameConflict.existingServerLocked}
+              />
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                Server for <strong>{renameConflict.charName}</strong> (being renamed)
+              </label>
+              <WowServerSelect
+                value={renameConflictNewServer}
+                onChange={setRenameConflictNewServer}
+                autoFocus={renameConflict.existingServerLocked && !renameConflict.targetServerLocked}
+                disabled={renameConflict.targetServerLocked}
+              />
+            </div>
+            {renameError && <div className="error" style={{ marginBottom: 8 }}>{renameError}</div>}
+            <div className="modal-actions">
+              <button
+                className="btn-primary"
+                onClick={handleResolveRenameConflict}
+                disabled={renameSaving || !renameConflictNewServer.trim() || !renameConflictExistingServer.trim()}
+              >
+                {renameSaving ? 'Saving…' : 'Resolve & Rename'}
+              </button>
+              <button className="btn-secondary" onClick={() => setRenameConflict(null)}>
                 Cancel
               </button>
             </div>

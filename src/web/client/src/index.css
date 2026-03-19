@@ -519,6 +519,18 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .roster-row-selected:hover { background: rgba(204,16,16,0.12); }
 .roster-row-inactive td    { opacity: 0.6; }
 .roster-col-name           { font-weight: 600; color: var(--text); }
+.roster-char-name-cell     { display: inline-flex; align-items: center; gap: 4px; }
+.roster-char-name          { font-weight: 600; }
+.roster-server-tag {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: 2px;
+  letter-spacing: 0.02em;
+}
 .roster-col-action         { width: 1px; white-space: nowrap; padding-right: 12px !important; }
 .roster-col-player         { min-width: 110px; }
 

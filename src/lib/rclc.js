@@ -84,6 +84,16 @@ function stripRealm(playerName) {
 }
 
 /**
+ * Extract the realm suffix from a RCLC player field.
+ * "Anzhem-Area52" → "Area52"
+ * "Anzhem" → "" (no hyphen)
+ */
+function extractServer(playerName) {
+  const idx = playerName.lastIndexOf('-');
+  return idx > 0 ? playerName.slice(idx + 1) : '';
+}
+
+/**
  * Parse a RCLC date string "MM/DD/YY" → ISO "YYYY-MM-DD".
  */
 function parseDate(dateStr) {
@@ -127,13 +137,32 @@ function stripBrackets(name) {
  * @returns {{ entries: object[], warnings: string[], skipped: number }}
  */
 export function buildLootEntries(rows, roster, responseMap, existingKeys) {
-  const rosterByChar = new Map(roster.map(r => [r.charName.toLowerCase(), r]));
+  // Build lookup maps for server-aware roster matching.
+  //
+  // Rules (per user spec):
+  //   • If a roster entry has an empty server field → match by name alone (assume unique).
+  //   • If a roster entry has a server field set   → require both name AND server to match.
+  //
+  // rosterByName:       name.lower → [roster entries]           (may hold multiple same-name chars)
+  // rosterByNameServer: "name.lower|server.lower" → roster entry (only entries that have server set)
+  const rosterByName       = new Map();
+  const rosterByNameServer = new Map();
+  for (const r of roster) {
+    const nameKey = r.charName.toLowerCase();
+    if (!rosterByName.has(nameKey)) rosterByName.set(nameKey, []);
+    rosterByName.get(nameKey).push(r);
+    if (r.server) {
+      rosterByNameServer.set(`${nameKey}|${r.server.toLowerCase()}`, r);
+    }
+  }
+
   const entries  = [];
   const warnings = [];
   let skipped    = 0;
 
   for (const row of rows) {
     const charName     = stripRealm(row.player ?? '');
+    const charServer   = extractServer(row.player ?? '');
     const itemName     = stripBrackets(row.item ?? '');
     const dateIso      = parseDate(row.date ?? '');
     const boss         = (row.boss ?? '').trim();
@@ -141,9 +170,6 @@ export function buildLootEntries(rows, roster, responseMap, existingKeys) {
     const responseLabel = (row.response ?? '').trim();
 
     if (!charName || !itemName) continue;
-
-    // Skip rows where response indicates the item wasn't awarded as loot
-    // (handled by response map — unmapped = warn + Non-BIS, not skip)
 
     // Dedup
     const dedupKey = `${charName.toLowerCase()}|${itemName.toLowerCase()}|${dateIso}`;
@@ -161,21 +187,35 @@ export function buildLootEntries(rows, roster, responseMap, existingKeys) {
       warnings.push(`Unknown response "${responseLabel}" for ${charName} / ${itemName} — defaulted to Non-BIS`);
     }
 
-    // Look up Discord user ID from roster (best-effort)
-    const rosterEntry = rosterByChar.get(charName.toLowerCase());
-    const recipientId = rosterEntry?.ownerId ?? '';
+    // Look up Discord user ID and stable charId from roster (server-aware, best-effort).
+    // 1. If server present in RCLC and a roster entry has that server set → name+server match.
+    // 2. Otherwise fall back to any roster entry whose server field is empty (name-only match).
+    const nameKey    = charName.toLowerCase();
+    const candidates = rosterByName.get(nameKey) ?? [];
+    let rosterEntry  = null;
+    if (charServer) {
+      rosterEntry = rosterByNameServer.get(`${nameKey}|${charServer.toLowerCase()}`) ?? null;
+    }
+    if (!rosterEntry) {
+      // Name-only fallback: only for entries without a server set (assumed unique)
+      rosterEntry = candidates.find(r => !r.server) ?? null;
+    }
+
+    const recipientId    = rosterEntry?.ownerId ?? '';
+    const recipientCharId = rosterEntry?.charId  ?? '';
 
     entries.push({
-      id:            randomUUID(),
-      raidId:        '',
-      date:          dateIso,
+      id:              randomUUID(),
+      raidId:          '',
+      date:            dateIso,
       boss,
       itemName,
       difficulty,
       recipientId,
-      recipientChar: charName,
+      recipientChar:   charName,
       upgradeType,
-      notes:         responseLabel,
+      notes:           responseLabel,
+      recipientCharId,
     });
 
     existingKeys.add(dedupKey);

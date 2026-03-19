@@ -63,6 +63,9 @@ scripts/
   seed-item-db.js          — seed Item DB from Blizzard API
   seed-default-bis.js      — seed Default BIS from guides
   backfill-weapon-types.js — maintenance backfill
+  migrate-char-ids.js      — one-time migration: adds CharId to Roster (col H),
+                             BIS Submissions (col N), and Loot Log (col K)
+                             Usage: node --env-file=.env scripts/migrate-char-ids.js <teamSheetId>
   blizzard.js              — Blizzard API helpers
   wowhead.js               — Wowhead scraping helpers
 config/
@@ -115,22 +118,34 @@ The web app checks the role resolved from the Roster sheet after OAuth login.
 ## Google Sheets schema
 Column order is the source of truth. Tabs marked **[master]** live in the master sheet; all others live in each team's sheet.
 
-### Roster (A=CharName B=Class C=Spec D=Role E=Status F=OwnerId G=OwnerNick)
+### Roster (A=CharName B=Class C=Spec D=Role E=Status F=OwnerId G=OwnerNick H=CharId I=Server)
+- CharId (col H) = stable UUID generated when the character is added. Never changes on rename.
+  Cols A–G are unchanged from the original schema; old code reading A:G is unaffected.
+- Server (col I) = optional realm name (e.g. "Area 52"). Normally empty. Only populated when two
+  characters on the roster share the same name (different real-world servers). The UI forces both
+  entries to be given a server name when the conflict arises; RCLC imports use server+name to
+  disambiguate when the roster entry has a server set, and name-only when it is empty.
 - Realm column removed — not needed
 - Class and Spec are dropdown-validated in the sheet
 - Role is auto-filled by onEdit trigger when Spec is selected — do not write to it directly
 - Status values: Active | Bench | Inactive
 - OwnerId = Discord user ID (snowflake string)
 - OwnerNick = stable player nickname (editable by player on web app or officer in console)
+- To rename a character: `POST /api/roster/:charName/rename` — only writes col A; all linked data follows via CharId
 
-### Loot Log (A=Id B=RaidId C=Date D=Boss E=ItemName F=Difficulty G=RecipientId H=RecipientChar I=UpgradeType J=Notes)
+### Loot Log (A=Id B=RaidId C=Date D=Boss E=ItemName F=Difficulty G=RecipientId H=RecipientChar I=UpgradeType J=Notes K=RecipientCharId)
+- RecipientCharId (col K) = stable character UUID matching Roster!CharId.
+  Empty for entries written before the migration ran — name-based join is used as fallback.
 - UpgradeType values: BIS | Non-BIS | Tertiary
 - BIS and Non-BIS count toward loot totals (shown by difficulty N/H/M)
 - Tertiary is recorded but excluded from totals, shown separately
 - Primary loot entry path: RCLC CSV import via Discord bot
 - Fallback: manual entry form on web app `/loot`
 
-### BIS Submissions (A=Id B=CharName C=Spec D=Slot E=TrueBIS F=RaidBIS G=Rationale H=Status I=SubmittedAt J=ReviewedBy K=OfficerNote)
+### BIS Submissions (A=Id B=CharName C=Spec D=Slot E=TrueBIS F=RaidBIS G=Rationale H=Status I=SubmittedAt J=ReviewedBy K=OfficerNote L=TrueBISItemId M=RaidBISItemId N=CharId)
+- CharId (col N) = stable character UUID matching Roster!CharId.
+  Col B (CharName) is kept for readability and for backward compat with old prod code reading A:M.
+  New code joins via CharId; CharName is the fallback for un-migrated rows.
 - Status values: Pending | Approved | Rejected
 - TrueBIS = Overall BIS (best item from any source). Display label: "Overall BIS"
 - RaidBIS = Raid BIS (best item from current raid tier only). Display label: "Raid BIS"

@@ -60,7 +60,7 @@ router.use('*', requireAuth);
 // ── GET /api/bis ───────────────────────────────────────────────────────────────
 
 router.get('/', async (c) => {
-  const { teamSheetId, charName, spec } = c.get('session').user;
+  const { teamSheetId, charId, charName, spec } = c.get('session').user;
   if (!teamSheetId) return c.json({ noTeam: true });
 
   try {
@@ -74,7 +74,9 @@ router.get('/', async (c) => {
     const armorType     = getArmorType(canonicalSpec);
 
     const bySlot = Object.fromEntries(
-      submissions.filter(s => s.charName.toLowerCase() === charName.toLowerCase()).map(s => [s.slot, s])
+      submissions
+        .filter(s => (charId && s.charId ? s.charId === charId : s.charName.toLowerCase() === charName.toLowerCase()))
+        .map(s => [s.slot, s])
     );
 
     const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
@@ -129,7 +131,7 @@ router.post('/', async (c) => {
     return c.json({ error: 'updates[] is required' }, 400);
   }
 
-  const { teamSheetId, charName, spec } = c.get('session').user;
+  const { teamSheetId, charId, charName, spec } = c.get('session').user;
   if (!teamSheetId) return c.json({ error: 'No team configured' }, 400);
   if (!charName)    return c.json({ error: 'No character linked to this account' }, 400);
 
@@ -148,25 +150,26 @@ router.post('/', async (c) => {
     let cleared = 0;
 
     for (const u of validUpdates.filter(u => u.clearRejected)) {
-      await clearRejectedBisSubmission(teamSheetId, charName, u.slot);
+      await clearRejectedBisSubmission(teamSheetId, charId, u.slot, charName);
       cleared++;
     }
     for (const u of validUpdates.filter(u => u.clearPending)) {
-      await clearPendingBisSubmission(teamSheetId, charName, u.slot);
+      await clearPendingBisSubmission(teamSheetId, charId, u.slot, charName);
       cleared++;
     }
     for (const u of validUpdates.filter(u => u.clearSlot)) {
-      await clearBisSubmission(teamSheetId, charName, u.slot);
+      await clearBisSubmission(teamSheetId, charId, u.slot, charName);
       cleared++;
     }
     for (const u of validUpdates.filter(u => u.resetRaidBis)) {
-      await resetBisRaidBisField(teamSheetId, charName, u.slot);
+      await resetBisRaidBisField(teamSheetId, charId, u.slot, charName);
       cleared++;
     }
 
     const saveUpdates = validUpdates.filter(u => !u.clearPending && !u.clearRejected && !u.clearSlot && !u.resetRaidBis);
     if (saveUpdates.length) {
       await batchUpsertBisSubmissions(teamSheetId, saveUpdates.map(u => ({
+        charId,
         charName,
         spec,
         slot:          u.slot,

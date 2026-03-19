@@ -25,10 +25,10 @@ router.get('/', (c) => {
 
   const {
     id, username, avatar,
-    teamName, charName, spec, role, status, isOfficer, isGlobalOfficer,
+    teamName, charId, charName, spec, role, status, isOfficer, isGlobalOfficer,
     chars, teams,
   } = session.user;
-  return c.json({ id, username, avatar, teamName, charName, spec, role, status, isOfficer, isGlobalOfficer: isGlobalOfficer ?? false, chars: chars ?? [], teams: teams ?? [] });
+  return c.json({ id, username, avatar, teamName, charId, charName, spec, role, status, isOfficer, isGlobalOfficer: isGlobalOfficer ?? false, chars: chars ?? [], teams: teams ?? [] });
 });
 
 router.post('/active-char', requireAuth, async (c) => {
@@ -40,12 +40,13 @@ router.post('/active-char', requireAuth, async (c) => {
   const target = chars.find(ch => ch.charName.toLowerCase() === charName.toLowerCase());
   if (!target) return c.json({ error: 'Character not found on this account' }, 400);
 
+  session.user.charId   = target.charId;
   session.user.charName = target.charName;
   session.user.spec     = target.spec;
   session.user.role     = target.role;
   session.user.status   = target.status;
 
-  return c.json({ ok: true, charName: target.charName, spec: target.spec });
+  return c.json({ ok: true, charId: target.charId, charName: target.charName, spec: target.spec });
 });
 
 router.post('/active-team', requireAuth, async (c) => {
@@ -63,6 +64,7 @@ router.post('/active-team', requireAuth, async (c) => {
   session.user.teamSheetId = target.teamSheetId;
   session.user.isOfficer   = target.isOfficer;
   session.user.chars       = target.chars;
+  session.user.charId      = activeChar?.charId   ?? null;
   session.user.charName    = activeChar?.charName ?? null;
   session.user.spec        = activeChar?.spec     ?? null;
   session.user.role        = activeChar?.role     ?? null;
