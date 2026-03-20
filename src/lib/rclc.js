@@ -6,7 +6,7 @@
  *   6=response  7=votes  8=class  9=instance  10=boss  11+=gear slots
  *
  * player:   "CharName-RealmName" — realm suffix is stripped
- * date:     "MM/DD/YY"
+ * date:     "MM/DD/YY" (old) or "YYYY/MM/DD" (new)
  * instance: "Instance Name-Difficulty" — difficulty is the last hyphen segment
  * response: raw RCLC button label — mapped via RCLC Response Map sheet tab
  */
@@ -94,11 +94,18 @@ function extractServer(playerName) {
 }
 
 /**
- * Parse a RCLC date string "MM/DD/YY" → ISO "YYYY-MM-DD".
+ * Parse a RCLC date string → ISO "YYYY-MM-DD".
+ * Supports old format "MM/DD/YY" and new format "YYYY/MM/DD".
  */
 function parseDate(dateStr) {
   const parts = dateStr.split('/');
   if (parts.length !== 3) return dateStr;
+  // New format: first segment is 4-digit year
+  if (parts[0].length === 4) {
+    const [y, m, d] = parts;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  // Old format: MM/DD/YY
   const [m, d, y] = parts;
   const year = y.length === 2 ? `20${y}` : y;
   return `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
