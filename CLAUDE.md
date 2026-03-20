@@ -166,14 +166,42 @@ Column order is the source of truth. Tabs marked **[master]** live in the master
 - Seeded via web app `/admin` -> Sync Loot Tables (calls Blizzard Game Data API)
 - Crafted items are NOT in the Item DB
 
-### Raids (A=RaidId B=TeamId C=Date D=Instance E=Difficulty F=AttendeeIds)
-- AttendeeIds = comma-separated Discord user IDs
-- Populated via Warcraft Logs API (Phase 10); direct Sheet edit as interim
+### Raids (A=RaidId B=Date C=Instance D=Difficulty E=AttendeeIds)
+- RaidId = WCL report code (e.g. "AbCdEf12") — stable dedup key
+- AttendeeIds = pipe-separated Discord user IDs (e.g. "123|456|789")
+- Populated automatically by WCL cron sync on report completion
+- TeamId column removed — each team has its own sheet
+
+### Raid Encounters (A=RaidId B=EncounterId C=BossName D=Pulls E=Killed F=BestPct)
+- One row per boss per completed WCL report
+- EncounterId = WCL/Blizzard encounter ID (stable numeric ID per boss)
+- Killed = TRUE | FALSE
+- BestPct = lowest boss % reached across all pulls (0.0 = dead, 15.3 = 15.3% wipe)
+- Trash pulls (encounterID = 0) are excluded
+- Written by WCL cron sync on report completion only
+
+### Tier Snapshot (A=CharId B=CharName C=RaidId D=TierCount E=TierDetail F=UpdatedAt)
+- One row per roster character — **upserted** on every sync run including live reports
+- Represents current state, not history; RaidId = most recent report this was computed from
+- TierDetail = pipe-separated slot:track pairs, e.g. "Head:Mythic|Chest:Hero|Hands:Champion"
+- Track values: Veteran | Champion | Hero | Mythic
+- Characters not on the roster (pugs) are skipped
+- Used by council view to show tier piece status per candidate
+
+### Tier Items **[master]** (A=Class B=Slot C=ItemId)
+- Current season's tier piece item IDs, one row per class × slot (13 classes × 5 slots = 65 rows)
+- Seeded via web app `/admin` → Sync Tier Items (Blizzard API)
+- Updated once per tier when new content releases
+- The bonus ID → upgrade track name mapping (Veteran/Champion/Hero/Mythic) is a constant in wcl-sync.js
 
 ### Global Config **[master]** (A=Key B=Value)
 Guild-wide settings shared across all teams:
-- `guild_id`    — Discord guild (server) ID; required for officer role checks on web login
-- `web_app_url` — base URL of the web app (for link buttons in bot panels)
+- `guild_id`          — Discord guild (server) ID; required for officer role checks on web login
+- `web_app_url`       — base URL of the web app (for link buttons in bot panels)
+- `season_start`      — ISO date of current season start (e.g. "2025-01-21"); used as a universal cutoff for all historical data queries and WCL report filtering
+- `wcl_client_id`     — Warcraft Logs OAuth client ID (server-to-server)
+- `wcl_client_secret` — Warcraft Logs OAuth client secret (store as secret, not plain var)
+- `wcl_zone_ids`      — pipe-separated WCL zone IDs for current tier (e.g. "38|41"); fights outside these zones are excluded from sync
 
 ### Config (A=Key B=Value) — per team
 Team-specific settings:
@@ -190,6 +218,8 @@ Team-specific settings:
 - `brief_lead_time_minutes`   — default 60
 - `brief_auto_enabled`        — default true
 - `bis_default_sources`       — default "Icy Veins,Wowhead,Maxroll,Class Discord,Manual"
+- `wcl_guild_id`              — WCL guild/team ID for this team (e.g. "787359"); WCL treats each raid team as its own guild
+- `wcl_last_check`            — Unix ms timestamp of last successful sync; written by cron, not manually edited
 
 ### RCLC Response Map (A=RCLCButton B=InternalType C=CountedInTotals)
 Maps RCLootCouncil button labels to internal upgrade types:

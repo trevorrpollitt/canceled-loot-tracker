@@ -11,6 +11,7 @@ import { cors } from 'hono/cors';
 import { initTeams } from '../../lib/teams.js';
 import { sessionMiddleware } from './session.js';
 import { log } from '../../lib/logger.js';
+import { runWclSync } from '../../lib/wcl-sync.js';
 
 import authRouter      from './routes/auth.js';
 import meRouter        from './routes/me.js';
@@ -91,4 +92,17 @@ app.get('/*', async (c) => {
 
 log.verbose(`[web] Worker ready — BASE_PATH="${BASE_PATH}" LOG_LEVEL="${process.env.LOG_LEVEL ?? 'off'}"`);
 
-export default app;
+// ── Cloudflare Worker exports ─────────────────────────────────────────────────
+// Export both fetch (HTTP handler) and scheduled (cron handler) so wrangler
+// can route cron triggers to runWclSync without touching the HTTP path.
+
+export default {
+  fetch: app.fetch.bind(app),
+
+  async scheduled(event, env, ctx) {
+    log.verbose(`[cron] Scheduled trigger fired — cron="${event.cron}"`);
+    // Ensure teams are initialised before sync (may already be warm)
+    await initTeams();
+    await runWclSync();
+  },
+};
