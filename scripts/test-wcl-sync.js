@@ -101,7 +101,7 @@ async function main() {
     process.exit(1);
   }
 
-  const zoneIds       = (wcl_zone_ids ?? '').split('|').map(Number).filter(Boolean);
+  const zoneIds       = String(wcl_zone_ids ?? '').split('|').map(Number).filter(Boolean);
   const seasonStartMs = parseSheetDateMs(season_start);
 
   // ── Step 2: WCL auth ───────────────────────────────────────────────────────

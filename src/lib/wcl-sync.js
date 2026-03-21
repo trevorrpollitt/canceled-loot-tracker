@@ -161,7 +161,7 @@ export async function runWclSync() {
     return;
   }
 
-  const zoneIds = (wcl_zone_ids ?? '').split('|').map(Number).filter(Boolean);
+  const zoneIds = String(wcl_zone_ids ?? '').split('|').map(Number).filter(Boolean);
   if (!zoneIds.length) {
     log.verbose('[wcl-sync] wcl_zone_ids not configured — skipping');
     return;
