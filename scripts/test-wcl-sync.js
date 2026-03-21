@@ -19,8 +19,10 @@ import { getValidEncounterIds, getReportsForGuild, getReportFights, getCombatant
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const args        = process.argv.slice(2);
-const filterTeam  = args[args.indexOf('--team')  + 1]?.toLowerCase();
-const filterReport = args[args.indexOf('--report') + 1];
+const teamIdx      = args.indexOf('--team');
+const reportIdx    = args.indexOf('--report');
+const filterTeam   = teamIdx   >= 0 ? args[teamIdx   + 1]?.toLowerCase() : undefined;
+const filterReport = reportIdx >= 0 ? args[reportIdx + 1]               : undefined;
 
 function pass(msg)  { console.log(`  ✓ ${msg}`); }
 function fail(msg)  { console.log(`  ✗ ${msg}`); }
