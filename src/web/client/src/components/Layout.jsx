@@ -60,6 +60,9 @@ export default function Layout({ children }) {
           {user?.isGlobalOfficer && (
             <NavLink to="/admin/default-bis" className="nav-tab">Raid BIS</NavLink>
           )}
+          {user?.isOfficer && (
+            <NavLink to="/admin" className="nav-tab">Admin</NavLink>
+          )}
         </nav>
       </header>
 

@@ -1337,8 +1337,9 @@ export function applyRaidBisInference(rows, itemDb) {
 }
 
 /**
- * Raids tab  (A=RaidId B=TeamId C=Date D=Instance E=Difficulty F=AttendeeIds)
- * AttendeeIds is a comma-separated list of Discord user ID strings.
+ * Raids tab  (A=RaidId B=Date C=Instance D=Difficulty E=AttendeeIds)
+ * AttendeeIds is a pipe-separated list of Discord user ID strings.
+ * (TeamId column was removed — each team has its own sheet.)
  *
  * @param {string} sheetId
  * @returns {object[]}
@@ -1346,18 +1347,211 @@ export function applyRaidBisInference(rows, itemDb) {
 export async function getRaids(sheetId) {
   log.verbose(`[sheets] getRaids (sheet ${sheetId.slice(-6)})`);
   return cachedRead(sheetId, 'raids', async () => {
-    const rows = await readRange(sheetId, 'Raids!A2:F');
+    const rows = await readRange(sheetId, 'Raids!A2:E');
     return rows
       .map(r => ({
         raidId:      r[0] ?? '',
-        teamId:      r[1] ?? '',
-        date:        r[2] ?? '',
-        instance:    r[3] ?? '',
-        difficulty:  r[4] ?? '',
-        attendeeIds: String(r[5] ?? '').split(',').map(s => s.trim()).filter(Boolean),
+        date:        r[1] ?? '',
+        instance:    r[2] ?? '',
+        difficulty:  r[3] ?? '',
+        attendeeIds: String(r[4] ?? '').split('|').map(s => s.trim()).filter(Boolean),
       }))
       .filter(r => r.raidId);
   });
+}
+
+/**
+ * Upsert a single Raids row by RaidId.
+ * Writes a new row if the RaidId is not found; overwrites in place if it is.
+ *
+ * @param {string} sheetId
+ * @param {{ raidId, date, instance, difficulty, attendeeIds }} raid
+ */
+export async function upsertRaid(sheetId, raid) {
+  return upsertRaids(sheetId, [raid]);
+}
+
+/**
+ * Upsert multiple Raids rows in one read + one batchUpdate + one optional append.
+ * Keyed by RaidId.
+ *
+ * @param {string}   sheetId
+ * @param {object[]} raids  Array of { raidId, date, instance, difficulty, attendeeIds }
+ */
+export async function upsertRaids(sheetId, raids) {
+  if (!raids.length) return;
+  log.verbose(`[sheets] upsertRaids (sheet ${sheetId.slice(-6)}) — ${raids.length} row(s)`);
+  const existing = await readRange(sheetId, 'Raids!A2:A');
+  const updates  = [];
+  const appends  = [];
+
+  for (const { raidId, date, instance, difficulty, attendeeIds } of raids) {
+    const rowIdx = existing.findIndex(r => r[0] === raidId);
+    const row    = [raidId, date, instance, difficulty, attendeeIds];
+    if (rowIdx >= 0) {
+      updates.push({ range: `Raids!A${rowIdx + 2}:E${rowIdx + 2}`, values: [row] });
+    } else {
+      appends.push(row);
+      existing.push([raidId]); // prevent duplicate appends within same batch
+    }
+  }
+
+  if (updates.length) await batchWriteRanges(sheetId, updates);
+  if (appends.length) await appendRows(sheetId, 'Raids!A:E', appends);
+  cacheInvalidate(sheetId, 'raids');
+}
+
+// ── Raid Encounters ───────────────────────────────────────────────────────────
+
+/**
+ * Raid Encounters tab  (A=RaidId B=EncounterId C=BossName D=Pulls E=Killed F=BestPct)
+ * One row per boss per completed report. Written by WCL sync; never edited manually.
+ *
+ * @param {string} sheetId
+ * @returns {object[]}
+ */
+export async function getRaidEncounters(sheetId) {
+  log.verbose(`[sheets] getRaidEncounters (sheet ${sheetId.slice(-6)})`);
+  const rows = await readRange(sheetId, 'Raid Encounters!A2:F');
+  return rows
+    .map(r => ({
+      raidId:      r[0] ?? '',
+      encounterId: Number(r[1] ?? 0),
+      bossName:    r[2] ?? '',
+      pulls:       Number(r[3] ?? 0),
+      killed:      String(r[4] ?? '').toUpperCase() === 'TRUE',
+      bestPct:     Number(r[5] ?? 100),
+    }))
+    .filter(r => r.raidId);
+}
+
+/**
+ * Upsert Raid Encounters rows. Keyed by RaidId + EncounterId.
+ *
+ * @param {string}   sheetId
+ * @param {object[]} rows  Array of { raidId, encounterId, bossName, pulls, killed, bestPct }
+ */
+export async function upsertRaidEncounters(sheetId, rows) {
+  if (!rows.length) return;
+  log.verbose(`[sheets] upsertRaidEncounters (sheet ${sheetId.slice(-6)}) — ${rows.length} row(s)`);
+  const existing = await readRange(sheetId, 'Raid Encounters!A2:B');
+  const updates  = [];
+  const appends  = [];
+
+  for (const row of rows) {
+    const rowIdx = existing.findIndex(
+      r => r[0] === row.raidId && String(r[1]) === String(row.encounterId),
+    );
+    const cells = [
+      row.raidId,
+      row.encounterId,
+      row.bossName,
+      row.pulls,
+      row.killed ? 'TRUE' : 'FALSE',
+      row.bestPct,
+    ];
+    if (rowIdx >= 0) {
+      updates.push({ range: `Raid Encounters!A${rowIdx + 2}:F${rowIdx + 2}`, values: [cells] });
+    } else {
+      appends.push(cells);
+      existing.push([row.raidId, String(row.encounterId)]); // prevent duplicate appends
+    }
+  }
+
+  if (updates.length) await batchWriteRanges(sheetId, updates);
+  if (appends.length) await appendRows(sheetId, 'Raid Encounters!A:F', appends);
+}
+
+// ── Tier Snapshot ─────────────────────────────────────────────────────────────
+
+/**
+ * Tier Snapshot tab  (A=CharId B=CharName C=RaidId D=TierCount E=TierDetail F=UpdatedAt)
+ * One row per roster character — upserted on every WCL sync run, even for live reports.
+ * Consumers should treat this as "current state" not a history.
+ *
+ * TierDetail: pipe-separated slot:track pairs, e.g. "Head:Mythic|Chest:Hero|Hands:Champion"
+ *
+ * @param {string} sheetId
+ * @returns {object[]}
+ */
+export async function getTierSnapshot(sheetId) {
+  log.verbose(`[sheets] getTierSnapshot (sheet ${sheetId.slice(-6)})`);
+  const rows = await readRange(sheetId, 'Tier Snapshot!A2:F');
+  return rows
+    .map(r => ({
+      charId:     r[0] ?? '',
+      charName:   r[1] ?? '',
+      raidId:     r[2] ?? '',
+      tierCount:  Number(r[3] ?? 0),
+      tierDetail: r[4] ?? '',
+      updatedAt:  r[5] ?? '',
+    }))
+    .filter(r => r.charId);
+}
+
+/**
+ * Upsert Tier Snapshot rows. Keyed by CharId — one row per character, overwritten in place.
+ *
+ * @param {string}   sheetId
+ * @param {object[]} snapshots  Array of { charId, charName, raidId, tierCount, tierDetail, updatedAt }
+ */
+export async function upsertTierSnapshot(sheetId, snapshots) {
+  if (!snapshots.length) return;
+  log.verbose(`[sheets] upsertTierSnapshot (sheet ${sheetId.slice(-6)}) — ${snapshots.length} row(s)`);
+  const existing = await readRange(sheetId, 'Tier Snapshot!A2:A');
+  const updates  = [];
+  const appends  = [];
+
+  for (const snap of snapshots) {
+    const rowIdx = existing.findIndex(r => r[0] === snap.charId);
+    const cells  = [snap.charId, snap.charName, snap.raidId, snap.tierCount, snap.tierDetail, snap.updatedAt];
+    if (rowIdx >= 0) {
+      updates.push({ range: `Tier Snapshot!A${rowIdx + 2}:F${rowIdx + 2}`, values: [cells] });
+    } else {
+      appends.push(cells);
+      existing.push([snap.charId]); // prevent duplicate appends within same batch
+    }
+  }
+
+  if (updates.length) await batchWriteRanges(sheetId, updates);
+  if (appends.length) await appendRows(sheetId, 'Tier Snapshot!A:F', appends);
+}
+
+// ── Tier Items (master) ───────────────────────────────────────────────────────
+
+/**
+ * Tier Items tab in the master sheet  (A=Class B=Slot C=ItemId)
+ * Stores the current season's tier piece item IDs per class and slot.
+ * Seeded via /admin → Sync Tier Items (Blizzard API).
+ *
+ * @returns {object[]}  Array of { class, slot, itemId }
+ */
+export async function getTierItems() {
+  log.verbose('[sheets] getTierItems');
+  const masterSheetId = getMasterSheetId();
+  return cachedRead(masterSheetId, 'tierItems', async () => {
+    const rows = await readRange(masterSheetId, 'Tier Items!A2:C');
+    return rows
+      .filter(r => r[0] && r[1] && r[2])
+      .map(r => ({ class: r[0].trim(), slot: r[1].trim(), itemId: Number(r[2]) }));
+  });
+}
+
+/**
+ * Overwrite the Tier Items tab in the master sheet.
+ * Called by /admin → Sync Tier Items after fetching from Blizzard API.
+ *
+ * @param {object[]} items  Array of { class, slot, itemId }
+ */
+export async function setTierItems(items) {
+  log.verbose(`[sheets] setTierItems — ${items.length} rows`);
+  const masterSheetId = getMasterSheetId();
+  await clearRange(masterSheetId, 'Tier Items!A2:C');
+  if (items.length) {
+    const values = items.map(i => [i.class, i.slot, i.itemId]);
+    await writeRange(masterSheetId, `Tier Items!A2:C${items.length + 1}`, values);
+  }
+  cacheInvalidate(masterSheetId, 'tierItems');
 }
 
 /**

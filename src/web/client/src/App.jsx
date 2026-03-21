@@ -3,6 +3,7 @@ import { useMe } from './hooks/useMe.js';
 import Login            from './pages/Login.jsx';
 import Dashboard        from './pages/Dashboard.jsx';
 import Bis              from './pages/Bis.jsx';
+import Admin            from './pages/Admin.jsx';
 import AdminDefaultBis  from './pages/AdminDefaultBis.jsx';
 import AdminBisReview   from './pages/AdminBisReview.jsx';
 import Council          from './pages/Council.jsx';
@@ -70,6 +71,11 @@ export default function App() {
       <Route path="/roster" element={
         <OfficerRoute>
           <Layout><RosterPage /></Layout>
+        </OfficerRoute>
+      } />
+      <Route path="/admin" element={
+        <OfficerRoute>
+          <Layout><Admin /></Layout>
         </OfficerRoute>
       } />
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -176,4 +176,12 @@ export async function fetchRaidItems(instanceId, difficulty = 'MYTHIC') {
   return detailed.filter(Boolean);
 }
 
+/**
+ * Get an item set by ID.
+ * Returns the set name and its item list (each with id + name).
+ */
+export async function getItemSet(itemSetId) {
+  return blizzardFetch(`/data/wow/item-set/${itemSetId}`);
+}
+
 export { pLimit };

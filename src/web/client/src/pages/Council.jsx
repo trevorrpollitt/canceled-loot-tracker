@@ -37,9 +37,44 @@ function sortCandidates(candidates) {
   });
 }
 
-// ── Curio candidate table ─────────────────────────────────────────────────────
+// ── Tier helpers ──────────────────────────────────────────────────────────────
 
-const TIER_SLOT_SHORT = { Head: 'He', Shoulders: 'Sh', Chest: 'Ch', Hands: 'Ha', Legs: 'Le' };
+const TIER_SLOT_SHORT      = { Head: 'He', Shoulders: 'Sh', Chest: 'Ch', Hands: 'Ha', Legs: 'Le' };
+const TIER_SLOT_INITIAL    = { Head: 'H',  Shoulders: 'S',  Chest: 'C',  Hands: 'Ha', Legs: 'L'  };
+
+const TRACK_COLOR = {
+  Veteran:  '#4ecdc4',
+  Champion: '#60a5fa',
+  Hero:     '#c084fc',
+  Mythic:   '#fbbf24',
+};
+
+function TierPips({ tierSlots, activeSlot }) {
+  const owned = Object.keys(tierSlots ?? {}).length;
+  return (
+    <span className="council-tier-pips-owned" title={`${owned}/5 tier pieces`}>
+      {Object.entries(TIER_SLOT_INITIAL).map(([slot, short]) => {
+        const track   = tierSlots?.[slot];
+        const isActive = slot === activeSlot;
+        const classes = [
+          'council-tier-pip',
+          track    ? 'active'      : '',
+          isActive ? 'active-slot' : '',
+        ].filter(Boolean).join(' ');
+        return (
+          <span
+            key={slot}
+            className={classes}
+            style={track ? { color: TRACK_COLOR[track] ?? '#aaa' } : { opacity: isActive ? 0.5 : 0.2 }}
+            title={track ? `${slot}: ${track}` : slot}
+          >{short}</span>
+        );
+      })}
+    </span>
+  );
+}
+
+// ── Curio candidate table ─────────────────────────────────────────────────────
 
 function CurioCandidateRow({ c }) {
   return (
@@ -56,6 +91,9 @@ function CurioCandidateRow({ c }) {
             title={slot}
           >{short}</span>
         ))}
+      </td>
+      <td className="council-col-tier-slots">
+        <TierPips tierSlots={c.tierSlots} />
       </td>
       <td className="council-col-stats">
         <span className="council-stat-bis">{c.bisH}/{c.bisM}</span>
@@ -122,7 +160,8 @@ function CurioCandidateTable({ curioItemId }) {
               <tr>
                 <th className="council-col-char">Character</th>
                 <th className="council-col-spec">Spec</th>
-                <th className="council-col-tier-slots">Tier Slots Needed</th>
+                <th className="council-col-tier-slots">Tier Needed</th>
+                <th className="council-col-tier-slots">Tier Owned</th>
                 <th className="council-col-stats">BIS H/M</th>
                 <th className="council-col-stats">Non-BIS H/M</th>
                 <th className="council-col-stats" title="Account total across all characters">Acct BIS H/M</th>
@@ -207,13 +246,18 @@ function BenchDot() {
   return <span className="council-bench-dot" title="Benched" />;
 }
 
-function CandidateRow({ c }) {
+function CandidateRow({ c, isTierToken, itemSlot }) {
   return (
     <tr>
       <td className="council-col-char">
         {c.charName}{c.status === 'Bench' && <BenchDot />}
       </td>
       <td className="council-col-spec">{c.spec}</td>
+      {isTierToken && (
+        <td className="council-col-tier-slots">
+          <TierPips tierSlots={c.tierSlots} activeSlot={itemSlot} />
+        </td>
+      )}
       <td className="council-col-stats">
         <span className="council-stat-bis">{c.bisH}/{c.bisM}</span>
       </td>
@@ -314,6 +358,7 @@ function CandidateTable({ itemId, showAll, onToggle }) {
               <tr>
                 <th className="council-col-char">Character</th>
                 <th className="council-col-spec">Spec</th>
+                {item.isTierToken && <th className="council-col-tier-slots">Tier Owned</th>}
                 <th className="council-col-stats" title="BIS drops (Heroic/Mythic)">BIS</th>
                 <th className="council-col-stats" title="Non-BIS drops (Heroic/Mythic)">Non-BIS</th>
                 <th className="council-col-stats" title="Account BIS drops (Heroic/Mythic)">Acct BIS</th>
@@ -324,7 +369,7 @@ function CandidateTable({ itemId, showAll, onToggle }) {
               </tr>
             </thead>
             <tbody>
-              {sorted.map(c => <CandidateRow key={c.charName} c={c} />)}
+              {sorted.map(c => <CandidateRow key={c.charName} c={c} isTierToken={item.isTierToken} itemSlot={item.slot} />)}
             </tbody>
           </table>
         </div>

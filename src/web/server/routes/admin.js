@@ -15,9 +15,11 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getDefaultBis, getDefaultBisOverrides, getItemDb, getSpecBisConfig, setSpecBisSource,
   applyRaidBisInference, updateDefaultBisOverrides, getBisSubmissions,
-  approveBisSubmission, rejectBisSubmission,
+  approveBisSubmission, rejectBisSubmission, getConfig,
 } from '../../../lib/sheets.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand } from '../../../lib/specs.js';
+import { getAllTeams } from '../../../lib/teams.js';
+import { runWclSyncForTeam } from '../../../lib/wcl-sync.js';
 
 const TIER_SLOTS     = new Set(['Head', 'Shoulders', 'Chest', 'Hands', 'Legs']);
 const CATALYST_SLOTS = new Set(['Neck', 'Back', 'Wrists', 'Waist', 'Feet']);
@@ -286,6 +288,32 @@ router.post('/bis-review/reject', requireOfficer, async (c) => {
   } catch (err) {
     console.error('[ADMIN] bis-review reject error:', err);
     return c.json({ error: 'Failed to reject submission' }, 500);
+  }
+});
+
+// ── WCL sync (manual trigger) ─────────────────────────────────────────────────
+
+router.get('/wcl-status', requireOfficer, async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  try {
+    const config = await getConfig(teamSheetId);
+    const lastCheck = Number(config.wcl_last_check) || null;
+    return c.json({ lastCheck });
+  } catch (err) {
+    return c.json({ error: 'Failed to load status' }, 500);
+  }
+});
+
+router.post('/wcl-sync', requireOfficer, async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const team = getAllTeams().find(t => t.sheetId === teamSheetId);
+  if (!team) return c.json({ error: 'Team not found' }, 404);
+  try {
+    await runWclSyncForTeam(team);
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error('[admin] WCL sync error:', err);
+    return c.json({ error: err.message ?? 'Sync failed' }, 500);
   }
 });
 

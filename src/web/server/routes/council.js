@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getItemDb, getRoster, getLootLog, getBisSubmissions,
-  getEffectiveDefaultBis, getRaids, getConfig,
+  getEffectiveDefaultBis, getRaids, getConfig, getTierSnapshot,
 } from '../../../lib/sheets.js';
 import { toCanonical, getArmorType, canUseWeapon } from '../../../lib/specs.js';
 import { log } from '../../../lib/logger.js';
@@ -29,6 +29,16 @@ function matchesBis(bisValue, bisItemId, item, charArmorType, slot) {
   }
   if (bisItemId && String(bisItemId) === String(item.itemId)) return true;
   return item.name.toLowerCase() === bisValue.toLowerCase();
+}
+
+/** Parse "Head:Mythic|Chest:Hero" → { Head: 'Mythic', Chest: 'Hero' } */
+function parseTierDetail(detail) {
+  const map = {};
+  for (const piece of (detail ?? '').split('|').filter(Boolean)) {
+    const [slot, track] = piece.split(':');
+    if (slot) map[slot] = track ?? 'Unknown';
+  }
+  return map;
 }
 
 function isEligible(item, charArmorType, canonSpec) {
@@ -86,6 +96,15 @@ router.get('/candidates', async (c) => {
     const item = itemDb.find(i => String(i.itemId) === String(itemId));
     if (!item) return c.json({ error: 'Item not found' }, 404);
     const itemSlot = item.slot;
+
+    // Tier snapshot — only needed when the item is a tier token
+    const tierSnapshotMap = new Map(); // charId → { slot → track }
+    if (item.isTierToken) {
+      const snapshots = await getTierSnapshot(teamSheetId);
+      for (const snap of snapshots) {
+        if (snap.charId) tierSnapshotMap.set(snap.charId, parseTierDetail(snap.tierDetail));
+      }
+    }
 
     const stats = {};
     for (const entry of lootLog) {
@@ -167,6 +186,7 @@ router.get('/candidates', async (c) => {
         acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
         raidsAttended: raidsByOwner[char.ownerId] ?? 0,
         overallBisMatch, raidBisMatch, hasRaidBis: Boolean(resolvedRaidBis),
+        ...(item.isTierToken && { tierSlots: tierSnapshotMap.get(char.charId) ?? {} }),
       });
     }
 
@@ -190,10 +210,16 @@ router.get('/curio-candidates', async (c) => {
   const { teamSheetId } = c.get('session').user;
   if (!teamSheetId) return c.json({ error: 'No team configured' }, 400);
   try {
-    const [roster, lootLog, bisSubmissions, effectiveBis, raids, config] = await Promise.all([
+    const [roster, lootLog, bisSubmissions, effectiveBis, raids, config, tierSnapshots] = await Promise.all([
       getRoster(teamSheetId), getLootLog(teamSheetId), getBisSubmissions(teamSheetId),
       getEffectiveDefaultBis(), getRaids(teamSheetId), getConfig(teamSheetId),
+      getTierSnapshot(teamSheetId),
     ]);
+
+    const tierSnapshotMap = new Map(); // charId → { slot → track }
+    for (const snap of tierSnapshots) {
+      if (snap.charId) tierSnapshotMap.set(snap.charId, parseTierDetail(snap.tierDetail));
+    }
 
     const stats = {};
     for (const entry of lootLog) {
@@ -249,6 +275,7 @@ router.get('/curio-candidates', async (c) => {
       const acct = acctStats[char.ownerId] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       candidates.push({
         charName: char.charName, class: char.class, spec: char.spec, status: char.status, tierSlotsWanted,
+        tierSlots: tierSnapshotMap.get(char.charId) ?? {},
         bisH: s.bisH, bisM: s.bisM, nonBisH: s.nonBisH, nonBisM: s.nonBisM,
         acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
         raidsAttended: raidsByOwner[char.ownerId] ?? 0,

@@ -15,6 +15,10 @@ zone_name = "canceledwow.com"
 directory = "./src/web/client/dist/loot"
 binding = "ASSETS"
 
+[triggers]
+# WCL sync — poll for new/updated raid reports every 10 minutes
+crons = ["*/10 * * * *"]
+
 [build]
 command = "npm run build"
 watch_dir = ["src/web/client/src", "src/web/server"]
