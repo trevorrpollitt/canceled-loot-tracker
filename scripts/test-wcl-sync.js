@@ -14,7 +14,7 @@
  */
 
 import { getGlobalConfig, getConfig, getTeamRegistry, getRoster, getTierItems } from '../src/lib/sheets.js';
-import { getValidEncounterIds, getReportsForGuild, getReportFights, getCombatantInfo } from '../src/lib/wcl.js';
+import { getValidEncounterIds, getEncounterZone, getReportsForGuild, getReportFights, getCombatantInfo } from '../src/lib/wcl.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -257,7 +257,24 @@ async function main() {
           info(`  Fight encounter IDs in report: ${bossEncounterIds.join(', ')}`);
           info(`  Valid encounter IDs from zone config: ${[...validEncounterIds].join(', ') || '(none)'}`);
           const missing = bossEncounterIds.filter(id => !validEncounterIds.has(id));
-          if (missing.length) info(`  ⚠  Unrecognised IDs (not in wcl_zone_ids zones): ${missing.join(', ')}`);
+          if (missing.length) {
+            info(`  ⚠  Unrecognised IDs (not in wcl_zone_ids zones): ${missing.join(', ')}`);
+            if (!validEncounterIds.size) {
+              // Zone IDs are probably wrong — look up the zone for the first encounter
+              info('  Attempting to auto-detect correct zone ID from first encounter...');
+              try {
+                const enc = await getEncounterZone(bossEncounterIds[0], wcl_client_id, wcl_client_secret);
+                if (enc) {
+                  info(`  Encounter ${enc.encounterId} "${enc.encounterName}" belongs to zone ${enc.zoneId} "${enc.zoneName}"`);
+                  info(`  → Set wcl_zone_ids = ${enc.zoneId} in your Global Config sheet`);
+                } else {
+                  info(`  Could not resolve zone for encounter ${bossEncounterIds[0]}`);
+                }
+              } catch (e) {
+                info(`  Zone lookup failed: ${e.message}`);
+              }
+            }
+          }
         } else {
           info('  No boss fights at all (all fights are trash — encounterID === 0)');
         }

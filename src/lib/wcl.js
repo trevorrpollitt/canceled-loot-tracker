@@ -124,6 +124,21 @@ const Q_COMBATANT_INFO = `
   }
 `;
 
+const Q_ENCOUNTER_ZONE = `
+  query GetEncounterZone($encounterId: Int!) {
+    worldData {
+      encounter(id: $encounterId) {
+        id
+        name
+        zone {
+          id
+          name
+        }
+      }
+    }
+  }
+`;
+
 const Q_ZONE_ENCOUNTERS = `
   query GetZoneEncounters($zoneId: Int!) {
     worldData {
@@ -140,6 +155,27 @@ const Q_ZONE_ENCOUNTERS = `
 `;
 
 // ── Exported API ───────────────────────────────────────────────────────────────
+
+/**
+ * Look up which zone a single encounter belongs to.
+ * Used by the test script to auto-detect the correct wcl_zone_ids value.
+ *
+ * @param {number} encounterId
+ * @param {string} clientId
+ * @param {string} clientSecret
+ * @returns {{ encounterId, encounterName, zoneId, zoneName } | null}
+ */
+export async function getEncounterZone(encounterId, clientId, clientSecret) {
+  const data = await gql(Q_ENCOUNTER_ZONE, { encounterId }, clientId, clientSecret);
+  const enc  = data.worldData?.encounter;
+  if (!enc) return null;
+  return {
+    encounterId:   enc.id,
+    encounterName: enc.name,
+    zoneId:        enc.zone?.id,
+    zoneName:      enc.zone?.name,
+  };
+}
 
 /**
  * Build a Set of valid WCL encounter IDs for the given zone IDs.
