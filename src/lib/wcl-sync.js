@@ -66,16 +66,20 @@ import {
   getCombatantInfo,
 } from './wcl.js';
 
-// ── Upgrade track bonus ID map ─────────────────────────────────────────────────
-// Maps WCL/WoW bonus IDs to human-readable tier piece track names.
-// Update once per major patch when new bonus IDs are introduced.
-// Midnight Season 1 upgrade track bonus IDs
-const TRACK_BY_BONUS_ID = {
-  13326: 'Veteran',
-  13333: 'Champion',
-  13340: 'Hero',
-  13574: 'Mythic',
-};
+/**
+ * Parse the wcl_track_bonus_ids Global Config value into a bonus ID → track name map.
+ * Format: "13326:Veteran|13333:Champion|13340:Hero|13574:Mythic"
+ * Returns an empty object (all tracks Unknown) if the value is missing or malformed.
+ */
+function parseTrackBonusIds(value) {
+  if (!value) return {};
+  return Object.fromEntries(
+    String(value).split('|')
+      .map(s => s.split(':'))
+      .filter(([id, name]) => id && name)
+      .map(([id, name]) => [Number(id), name.trim()]),
+  );
+}
 
 // WCL difficulty integer → human label
 const DIFFICULTY_LABEL = {
@@ -92,7 +96,7 @@ const DIFFICULTY_LABEL = {
  * current-season tier item IDs for the character's class, return an array of
  * { slot, track } for each tier piece found.
  */
-function findTierPieces(gear, tierItemMap) {
+function findTierPieces(gear, tierItemMap, trackBonusIds) {
   const pieces = [];
   for (const item of gear ?? []) {
     const slot = tierItemMap.get(Number(item.id));
@@ -100,8 +104,8 @@ function findTierPieces(gear, tierItemMap) {
 
     let track = 'Unknown';
     for (const bonusId of item.bonusIDs ?? []) {
-      if (TRACK_BY_BONUS_ID[bonusId]) {
-        track = TRACK_BY_BONUS_ID[bonusId];
+      if (trackBonusIds[bonusId]) {
+        track = trackBonusIds[bonusId];
         break;
       }
     }
@@ -153,7 +157,8 @@ export async function runWclSync() {
     return;
   }
 
-  const { wcl_client_id, wcl_zone_ids, season_start } = globalConfig;
+  const { wcl_client_id, wcl_zone_ids, season_start, wcl_track_bonus_ids } = globalConfig;
+  const trackBonusIds = parseTrackBonusIds(wcl_track_bonus_ids);
   // Secret lives in env (Cloudflare Worker secret / .dev.vars locally) — never in the sheet
   const wcl_client_secret = process.env.WCL_CLIENT_SECRET;
 
@@ -210,6 +215,7 @@ export async function runWclSync() {
         globalConfig,
         validEncounterIds,
         tierItemsByClass,
+        trackBonusIds,
         seasonStartMs,
         wcl_client_id,
         wcl_client_secret,
@@ -224,7 +230,7 @@ export async function runWclSync() {
 
 // ── Per-team sync ──────────────────────────────────────────────────────────────
 
-async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, seasonStartMs, clientId, clientSecret) {
+async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackBonusIds, seasonStartMs, clientId, clientSecret) {
   const config     = await getConfig(team.sheetId);
   const wclGuildId = config.wcl_guild_id ? Number(config.wcl_guild_id) : null;
 
@@ -252,7 +258,7 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
 
   for (const report of reports) {
     try {
-      await syncReport(report, team, validEncounterIds, tierItemsByClass, rosterLookup, seasonStartMs, clientId, clientSecret);
+      await syncReport(report, team, validEncounterIds, tierItemsByClass, trackBonusIds, rosterLookup, seasonStartMs, clientId, clientSecret);
     } catch (err) {
       log.error(`[wcl-sync] Team "${team.name}" report ${report.code} failed:`, err.message);
     }
@@ -264,7 +270,7 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
 
 // ── Per-report sync ────────────────────────────────────────────────────────────
 
-async function syncReport(report, team, validEncounterIds, tierItemsByClass, rosterLookup, seasonStartMs, clientId, clientSecret) {
+async function syncReport(report, team, validEncounterIds, tierItemsByClass, trackBonusIds, rosterLookup, seasonStartMs, clientId, clientSecret) {
   // Cheap pre-filter: skip anything before season start
   if (report.startTime < seasonStartMs) return;
 
@@ -298,7 +304,7 @@ async function syncReport(report, team, validEncounterIds, tierItemsByClass, ros
     if (!char) continue; // pug — skip
 
     const tierItemMap = tierItemsByClass.get(actor.subType) ?? new Map();
-    const tierPieces  = findTierPieces(event.gear, tierItemMap);
+    const tierPieces  = findTierPieces(event.gear, tierItemMap, trackBonusIds);
 
     snapshotRows.push({
       charId:     char.charId,
