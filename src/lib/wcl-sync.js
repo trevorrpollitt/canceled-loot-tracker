@@ -322,12 +322,18 @@ async function syncReport(report, team, validEncounterIds, tierItemsByClass, ros
   }
 
   // ── Raids row ────────────────────────────────────────────────────────────────
-  // Attendance: actors who map to a roster character with a Discord owner
+  // Attendance: derive from combatantEvents (same data used for tier snapshots)
+  // rather than masterData.actors, which includes everyone across the entire
+  // session log (alts, bench, other raids in the same night, etc.).
+  // CombatantInfo only includes players present in that specific fight pull.
   const attendeeIds = [...new Set(
-    actors
-      .map(a => resolveActor(a, rosterLookup))
-      .filter(c => c?.ownerId)
-      .map(c => c.ownerId),
+    combatantEvents
+      .map(event => {
+        const actor = actors.find(a => a.id === event.sourceID);
+        if (!actor) return null;
+        return resolveActor(actor, rosterLookup)?.ownerId ?? null;
+      })
+      .filter(Boolean),
   )];
 
   // Dominant difficulty among valid boss fights

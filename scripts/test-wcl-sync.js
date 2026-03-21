@@ -288,12 +288,13 @@ async function main() {
         continue;
       }
 
-      // Roster matching
+      // Roster matching — report against all session actors for info only
       const matched = actors.filter(a => resolveActor(a, rosterLookup));
       const pugs    = actors.filter(a => !resolveActor(a, rosterLookup));
-      info(`  Actors: ${actors.length} total, ${matched.length} roster matches, ${pugs.length} pug(s) skipped`);
+      info(`  Session actors: ${actors.length} total, ${matched.length} roster matches, ${pugs.length} unmatched`);
+      info(`  (unmatched session actors are alts/bench/other-raid members — not used for attendance)`);
       if (pugs.length) {
-        for (const p of pugs) info(`    pug: ${p.name}-${p.server ?? '?'}`);
+        for (const p of pugs) info(`    unmatched: ${p.name}-${p.server ?? '?'}`);
       }
 
       // CombatantInfo / tier gear
@@ -342,10 +343,17 @@ async function main() {
           info(`    ${name.padEnd(35)} ${ef.length} pull(s)  ${killed ? 'KILLED' : `best ${bestPct.toFixed(1)}%`}`);
         }
 
+        // Attendance from combatantEvents — players present in the latest boss fight only
         const attendeeIds = [...new Set(
-          actors.map(a => resolveActor(a, rosterLookup)).filter(c => c?.ownerId).map(c => c.ownerId),
+          combatantEvents
+            .map(event => {
+              const actor = actors.find(a => a.id === event.sourceID);
+              if (!actor) return null;
+              return resolveActor(actor, rosterLookup)?.ownerId ?? null;
+            })
+            .filter(Boolean),
         )];
-        info(`  Raids row: ${new Date(report.startTime).toISOString().split('T')[0]}  ${report.zone?.name}  ${attendeeIds.length} attendee(s)`);
+        info(`  Raids row: ${new Date(report.startTime).toISOString().split('T')[0]}  ${report.zone?.name}  ${attendeeIds.length} attendee(s) (from CombatantInfo, not session actors)`);
       } else {
         info('  (live report — Raids + Raid Encounters rows skipped until complete)');
       }
