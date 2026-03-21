@@ -210,8 +210,13 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
     return;
   }
 
-  // Use last-check timestamp to limit report queries; fall back to season start
-  const lastCheckMs = config.wcl_last_check ? Number(config.wcl_last_check) : seasonStartMs;
+  // Use last-check timestamp to limit report queries; fall back to season start.
+  // Guard against Google Sheets auto-formatting the value as a date serial
+  // (e.g. 46088 days ≈ today in Sheets, but 46088 ms ≈ epoch). Any real Unix ms
+  // timestamp for a raid log will be > Jan 1 2020 (1577836800000).
+  const MIN_VALID_MS = 1577836800000; // Jan 1 2020
+  const rawLastCheck = Number(config.wcl_last_check);
+  const lastCheckMs  = (rawLastCheck && rawLastCheck > MIN_VALID_MS) ? rawLastCheck : seasonStartMs;
   log.verbose(`[wcl-sync] Team "${team.name}": fetching reports since ${new Date(lastCheckMs).toISOString()}`);
 
   const reports = await getReportsForGuild(wclGuildId, lastCheckMs, clientId, clientSecret);

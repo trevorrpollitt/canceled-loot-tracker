@@ -168,8 +168,14 @@ async function main() {
     }
     pass(`wcl_guild_id: ${wclGuildId}`);
 
-    const lastCheckMs = config.wcl_last_check ? Number(config.wcl_last_check) : seasonStartMs;
-    info(`Last check: ${lastCheckMs ? new Date(lastCheckMs).toISOString() : 'never (using season_start)'}`);
+    const MIN_VALID_MS = 1577836800000; // Jan 1 2020 — guards against Sheets date serial leak
+    const rawLastCheck = Number(config.wcl_last_check);
+    const lastCheckMs  = (rawLastCheck && rawLastCheck > MIN_VALID_MS) ? rawLastCheck : seasonStartMs;
+    if (config.wcl_last_check && rawLastCheck <= MIN_VALID_MS) {
+      info(`wcl_last_check value "${config.wcl_last_check}" looks like a Sheets date serial — ignoring, using season_start instead`);
+      info('(delete the wcl_last_check row from your Config tab; the cron will recreate it after the first successful run)');
+    }
+    info(`Last check: ${new Date(lastCheckMs).toISOString()}`);
 
     // Fetch reports
     section('  Reports');
