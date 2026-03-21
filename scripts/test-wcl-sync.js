@@ -75,7 +75,7 @@ function findTierPieces(gear, tierItemMap) {
     for (const bonusId of item.bonusIDs ?? []) {
       if (TRACK_BY_BONUS_ID[bonusId]) { track = TRACK_BY_BONUS_ID[bonusId]; break; }
     }
-    pieces.push({ slot, track });
+    pieces.push({ slot, track, itemId: item.id, bonusIDs: item.bonusIDs ?? [] });
   }
   return pieces;
 }
@@ -323,8 +323,31 @@ async function main() {
 
       if (snapshotPreview.length) {
         info(`  Tier Snapshot rows that would be written (${snapshotPreview.length}):`);
+        const hasUnknown = snapshotPreview.some(s => s.detail.includes('Unknown'));
         for (const s of snapshotPreview) {
           info(`    ${s.name.padEnd(20)} ${s.count} piece(s)  ${s.detail}`);
+        }
+        if (hasUnknown) {
+          info('');
+          info('  ⚠  Some tier pieces have Unknown track — bonus IDs not in TRACK_BY_BONUS_ID map.');
+          info('  Bonus IDs found on Unknown-track tier pieces:');
+          const unknownBonusIds = new Set();
+          for (const event of combatantEvents) {
+            const actor = actors.find(a => a.id === event.sourceID);
+            if (!actor) continue;
+            if (!resolveActor(actor, rosterLookup)) continue;
+            const tierMap = tierItemsByClass.get(actor.subType) ?? new Map();
+            for (const item of event.gear ?? []) {
+              if (tierMap.has(Number(item.id))) {
+                const hasKnown = (item.bonusIDs ?? []).some(b => TRACK_BY_BONUS_ID[b]);
+                if (!hasKnown) {
+                  for (const b of item.bonusIDs ?? []) unknownBonusIds.add(b);
+                }
+              }
+            }
+          }
+          info(`  [${[...unknownBonusIds].sort((a, b) => a - b).join(', ')}]`);
+          info('  Update TRACK_BY_BONUS_ID in wcl-sync.js and scripts/test-wcl-sync.js with the correct mapping.');
         }
       } else {
         info('  No tier snapshot rows (no CombatantInfo matched to roster)');
