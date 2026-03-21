@@ -199,9 +199,9 @@ Guild-wide settings shared across all teams:
 - `guild_id`          — Discord guild (server) ID; required for officer role checks on web login
 - `web_app_url`       — base URL of the web app (for link buttons in bot panels)
 - `season_start`      — ISO date of current season start (e.g. "2025-01-21"); used as a universal cutoff for all historical data queries and WCL report filtering
-- `wcl_client_id`     — Warcraft Logs OAuth client ID (server-to-server)
-- `wcl_client_secret` — Warcraft Logs OAuth client secret (store as secret, not plain var)
+- `wcl_client_id`     — Warcraft Logs OAuth client ID (non-sensitive, fine in sheet)
 - `wcl_zone_ids`      — pipe-separated WCL zone IDs for current tier (e.g. "38|41"); fights outside these zones are excluded from sync
+- `wcl_client_secret` is **not** stored here — env var `WCL_CLIENT_SECRET` only (Cloudflare Worker secret in prod, `.dev.vars` locally)
 
 ### Config (A=Key B=Value) — per team
 Team-specific settings:

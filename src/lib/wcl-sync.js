@@ -130,7 +130,9 @@ export async function runWclSync() {
     return;
   }
 
-  const { wcl_client_id, wcl_client_secret, wcl_zone_ids, season_start } = globalConfig;
+  const { wcl_client_id, wcl_zone_ids, season_start } = globalConfig;
+  // Secret lives in env (Cloudflare Worker secret / .dev.vars locally) — never in the sheet
+  const wcl_client_secret = process.env.WCL_CLIENT_SECRET;
 
   if (!wcl_client_id || !wcl_client_secret) {
     log.verbose('[wcl-sync] WCL credentials not configured — skipping');
