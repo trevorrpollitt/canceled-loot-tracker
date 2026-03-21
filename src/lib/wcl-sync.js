@@ -24,6 +24,28 @@
  */
 
 import { log } from './logger.js';
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+/**
+ * Parse a date value that may come from Google Sheets as either:
+ *   - An ISO string: "2026-01-07"
+ *   - A Sheets date serial: 46025  (days since Dec 30 1899; returned by
+ *     UNFORMATTED_VALUE when the cell is date-formatted)
+ *
+ * Returns a Unix millisecond timestamp, or 0 if falsy/unparseable.
+ * Serials < 200000 are treated as Sheets date serials (covers dates up to ~2447).
+ */
+function parseSheetDateMs(value) {
+  if (!value) return 0;
+  const num = Number(value);
+  if (!isNaN(num) && num > 0 && num < 200000) {
+    // Sheets date serial → Unix ms  (25569 = days from Dec 30 1899 to Jan 1 1970)
+    return (num - 25569) * 86400 * 1000;
+  }
+  const ms = new Date(String(value)).getTime();
+  return isNaN(ms) ? 0 : ms;
+}
 import { getAllTeams } from './teams.js';
 import {
   getGlobalConfig,
@@ -145,7 +167,7 @@ export async function runWclSync() {
     return;
   }
 
-  const seasonStartMs = season_start ? new Date(season_start).getTime() : 0;
+  const seasonStartMs = parseSheetDateMs(season_start);
 
   // Fetch valid encounter IDs for all configured zones (one query per zone, done once)
   let validEncounterIds;

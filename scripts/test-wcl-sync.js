@@ -32,6 +32,17 @@ const SLOT_MAP = {
   ROBE: 'Chest', HAND: 'Hands', LEGS: 'Legs',
 };
 
+// Handles ISO strings ("2026-01-07") and Sheets date serials (46025 = days since Dec 30 1899)
+function parseSheetDateMs(value) {
+  if (!value) return 0;
+  const num = Number(value);
+  if (!isNaN(num) && num > 0 && num < 200000) {
+    return (num - 25569) * 86400 * 1000;
+  }
+  const ms = new Date(String(value)).getTime();
+  return isNaN(ms) ? 0 : ms;
+}
+
 const TRACK_BY_BONUS_ID = {
   10387: 'Veteran', 10388: 'Champion', 10389: 'Hero', 10390: 'Mythic',
 };
@@ -81,7 +92,7 @@ async function main() {
   wcl_client_id     ? pass(`wcl_client_id:     ${wcl_client_id}`)     : fail('wcl_client_id not set in Global Config');
   wcl_client_secret ? pass('WCL_CLIENT_SECRET: (set in env)')          : fail('WCL_CLIENT_SECRET not set in env');
   wcl_zone_ids      ? pass(`wcl_zone_ids:      ${wcl_zone_ids}`)       : fail('wcl_zone_ids not set in Global Config');
-  season_start      ? pass(`season_start:      ${season_start}`)       : fail('season_start not set in Global Config');
+  season_start      ? pass(`season_start:      ${season_start}  →  ${new Date(parseSheetDateMs(season_start)).toISOString().split('T')[0]}`) : fail('season_start not set in Global Config');
 
   if (!wcl_client_id || !wcl_client_secret) {
     console.error('\nCannot proceed without WCL credentials.');
@@ -89,7 +100,7 @@ async function main() {
   }
 
   const zoneIds       = (wcl_zone_ids ?? '').split('|').map(Number).filter(Boolean);
-  const seasonStartMs = season_start ? new Date(season_start).getTime() : 0;
+  const seasonStartMs = parseSheetDateMs(season_start);
 
   // ── Step 2: WCL auth ───────────────────────────────────────────────────────
   section('Step 2: WCL OAuth token');
