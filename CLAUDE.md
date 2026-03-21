@@ -220,6 +220,7 @@ Team-specific settings:
 - `bis_default_sources`       — default "Icy Veins,Wowhead,Maxroll,Class Discord,Manual"
 - `wcl_guild_id`              — WCL guild/team ID for this team (e.g. "787359"); WCL treats each raid team as its own guild
 - `wcl_last_check`            — Unix ms timestamp of last successful sync; written by cron, not manually edited
+- `wcl_pending_reports`       — pipe-separated `code:startTime:endTime:zoneName` entries for reports < 24h old; re-checked each run and reprocessed if endTime has changed; written by cron, not manually edited
 
 ### RCLC Response Map (A=RCLCButton B=InternalType C=CountedInTotals)
 Maps RCLootCouncil button labels to internal upgrade types:

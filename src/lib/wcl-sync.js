@@ -4,12 +4,16 @@
  * Called by the Cloudflare Worker scheduled handler (wrangler cron trigger).
  * For each team with a wcl_guild_id configured:
  *
- *   Every run (live + complete reports):
- *     • Fetch CombatantInfo from the latest pull → upsert Tier Snapshot
- *
- *   Completed reports only (endTime > 0):
+ *   Every report processed:
+ *     • Fetch CombatantInfo → upsert Tier Snapshot
  *     • Upsert Raids row (attendance, date, instance, difficulty)
  *     • Upsert Raid Encounters rows (boss pulls, kill status, best %)
+ *
+ * All reports are treated as complete. WCL provides no reliable API field to
+ * distinguish a live-logging report from a finished one. Instead, reports less
+ * than 24 hours old are stored in wcl_pending_reports and re-checked on the
+ * next run. If their endTime has changed (WCL uploaded more fights), they are
+ * reprocessed; if unchanged, they are skipped.
  *
  * Dedup strategy:
  *   Raids          — keyed by RaidId (WCL report code); upsert in place
@@ -221,6 +225,8 @@ export async function runWclSyncForTeam(team) {
 
 // ── Per-team sync ──────────────────────────────────────────────────────────────
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, seasonStartMs, clientId, clientSecret) {
   const config     = await getConfig(team.sheetId);
   const wclGuildId = config.wcl_guild_id ? Number(config.wcl_guild_id) : null;
@@ -239,27 +245,88 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
   const lastCheckMs  = (rawLastCheck && rawLastCheck > MIN_VALID_MS) ? rawLastCheck : seasonStartMs;
   log.verbose(`[wcl-sync] Team "${team.name}": fetching reports since ${new Date(lastCheckMs).toISOString()}`);
 
-  const reports = await getReportsForGuild(wclGuildId, lastCheckMs, clientId, clientSecret);
-  // Sort ascending so the most recent report is processed last — its tier snapshot wins
-  reports.sort((a, b) => a.startTime - b.startTime);
-  log.verbose(`[wcl-sync] Team "${team.name}": ${reports.length} report(s) to process`);
+  // Parse pending re-check map: code → { startTime, storedEndTime, zoneName }
+  // Entries older than 24 hours are dropped by not re-adding them to newPending below.
+  const pendingMap = new Map();
+  for (const entry of (config.wcl_pending_reports ?? '').split('|').filter(Boolean)) {
+    const [code, startTime, storedEndTime, ...zoneParts] = entry.split(':');
+    pendingMap.set(code, {
+      startTime:     Number(startTime),
+      storedEndTime: Number(storedEndTime),
+      zoneName:      zoneParts.join(':'),
+    });
+  }
 
-  if (!reports.length) return;
+  // Fetch new reports since last check; merge pending re-checks not already in batch
+  const newReports = await getReportsForGuild(wclGuildId, lastCheckMs, clientId, clientSecret);
+  newReports.sort((a, b) => a.startTime - b.startTime);
+
+  const newCodes   = new Set(newReports.map(r => r.code));
+  const allReports = [
+    ...newReports.map(r => ({ ...r, isRecheck: false })),
+    ...[...pendingMap.entries()]
+      .filter(([code]) => !newCodes.has(code))
+      .map(([code, d]) => ({ code, startTime: d.startTime, zone: { name: d.zoneName }, isRecheck: true })),
+  ];
+  allReports.sort((a, b) => a.startTime - b.startTime);
+
+  const recheckCount = allReports.filter(r => r.isRecheck).length;
+  if (recheckCount) {
+    log.warn(`[wcl-sync] Team "${team.name}": ${allReports.length} report(s) to process (${recheckCount} re-check)`);
+  } else {
+    log.verbose(`[wcl-sync] Team "${team.name}": ${allReports.length} report(s) to process`);
+  }
+
+  if (!allReports.length) {
+    await setConfigValue(team.sheetId, 'wcl_last_check', String(Date.now()));
+    return;
+  }
 
   const roster       = await getRoster(team.sheetId);
   const rosterLookup = buildRosterLookup(roster);
 
   // Accumulate data from all reports before writing — reduces Sheets API calls from
   // O(reports × characters) to O(1 read + 1 batchUpdate) per tab per team sync.
-  const allSnapshots    = new Map(); // charId → snapshotRow  (latest report wins; sorted asc)
+  const allSnapshots    = new Map(); // charId → snapshotRow (latest report wins; sorted asc)
   const allRaidRows     = [];
   const allEncounterRows = [];
+  const newPending      = new Map(); // code → { startTime, storedEndTime, zoneName }
 
-  for (let i = 0; i < reports.length; i++) {
-    const report = reports[i];
-    log.warn(`[wcl-sync] Team "${team.name}": processing report ${i + 1}/${reports.length} — ${report.code}`);
+  for (let i = 0; i < allReports.length; i++) {
+    const report = allReports[i];
+    log.warn(`[wcl-sync] Team "${team.name}": processing report ${i + 1}/${allReports.length} — ${report.code}`);
     try {
-      const result = await processReport(report, team, validEncounterIds, tierItemsByClass, trackRanges, rosterLookup, seasonStartMs, clientId, clientSecret);
+      let reportData;
+      try {
+        reportData = await getReportFights(report.code, clientId, clientSecret);
+      } catch (err) {
+        log.error(`[wcl-sync] Report ${report.code}: failed to fetch — ${err.message}`);
+        continue;
+      }
+      if (!reportData) continue;
+
+      const currentEndTime = Number(reportData.endTime);
+
+      // Re-checks: skip if WCL hasn't uploaded new fights since last run
+      if (report.isRecheck) {
+        const stored = pendingMap.get(report.code);
+        if (currentEndTime === stored.storedEndTime) {
+          log.verbose(`[wcl-sync] Report ${report.code}: unchanged — skipping`);
+          if (Date.now() - report.startTime < DAY_MS) {
+            newPending.set(report.code, { startTime: report.startTime, storedEndTime: currentEndTime, zoneName: report.zone?.name ?? '' });
+          }
+          continue;
+        }
+        log.warn(`[wcl-sync] Report ${report.code}: endTime updated — reprocessing`);
+      }
+
+      const result = await processReport(report, reportData, validEncounterIds, tierItemsByClass, trackRanges, rosterLookup, seasonStartMs, clientId, clientSecret);
+
+      // Track all recent reports for re-check regardless of result
+      if (Date.now() - report.startTime < DAY_MS) {
+        newPending.set(report.code, { startTime: report.startTime, storedEndTime: currentEndTime, zoneName: report.zone?.name ?? '' });
+      }
+
       if (!result) continue;
       const { snapshotRows, raidRow, encounterRows } = result;
       for (const snap of snapshotRows) allSnapshots.set(snap.charId, snap);
@@ -285,41 +352,41 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
     await upsertRaidEncounters(team.sheetId, allEncounterRows);
   }
 
-  // Advance the last-check cursor to now so the next run only fetches new reports
+  // Advance cursor; persist pending re-checks (reports < 24h old)
   await setConfigValue(team.sheetId, 'wcl_last_check', String(Date.now()));
+  await setConfigValue(team.sheetId, 'wcl_pending_reports',
+    [...newPending.entries()].map(([code, d]) => `${code}:${d.startTime}:${d.storedEndTime}:${d.zoneName}`).join('|'),
+  );
 }
 
 // ── Per-report data extraction ─────────────────────────────────────────────────
-// Returns { snapshotRows, raidRow, encounterRows } — no Sheets writes.
-// syncTeam accumulates results across all reports and bulk-writes at the end.
+// reportData is pre-fetched by the caller (syncTeam) so endTime can be checked
+// before deciding whether to reprocess. Returns { snapshotRows, raidRow,
+// encounterRows } or null if there is nothing to write.
 
-async function processReport(report, team, validEncounterIds, tierItemsByClass, trackRanges, rosterLookup, seasonStartMs, clientId, clientSecret) {
+async function processReport(report, reportData, validEncounterIds, tierItemsByClass, trackRanges, rosterLookup, seasonStartMs, clientId, clientSecret) {
   // Cheap pre-filter: skip anything before season start
   if (report.startTime < seasonStartMs) {
     log.verbose(`[wcl-sync] Report ${report.code}: before season start — skipping`);
     return null;
   }
 
-  const reportData = await getReportFights(report.code, clientId, clientSecret);
-  if (!reportData) return null;
-
   const { fights = [], masterData = {} } = reportData;
   const actors = masterData.actors ?? [];
 
-  // Filter fights: must be a boss encounter belonging to a configured zone
-  const validFights = fights.filter(
-    f => f.encounterID !== 0 && validEncounterIds.has(f.encounterID),
-  );
-
-  if (!validFights.length) {
-    log.verbose(`[wcl-sync] Report ${report.code}: no valid boss fights — skipping`);
+  if (!fights.length) {
+    log.verbose(`[wcl-sync] Report ${report.code}: no fights yet — skipping`);
     return null;
   }
 
-  // ── Tier Snapshot (live + complete) ─────────────────────────────────────────
-  // CombatantInfo from the highest-ID fight (most recent gear snapshot)
-  const latestFight     = fights.reduce((a, b) => b.id > a.id ? b : a);
-  const combatantEvents = await getCombatantInfo(report.code, latestFight.id, clientId, clientSecret);
+  // ── Tier Snapshot ────────────────────────────────────────────────────────────
+  // Prefer the most recent completed fight for CombatantInfo — WCL may not have
+  // finalised gear data for an actively in-progress pull yet.
+  const completedFights  = fights.filter(f => !f.inProgress);
+  const fightForSnapshot = (completedFights.length ? completedFights : fights)
+    .reduce((a, b) => b.id > a.id ? b : a);
+  const combatantEvents  = await getCombatantInfo(report.code, fightForSnapshot.id, clientId, clientSecret);
+  log.verbose(`[wcl-sync] Report ${report.code}: ${combatantEvents.length} combatant event(s) from fight ${fightForSnapshot.id}`);
 
   const snapshotRows = [];
   for (const event of combatantEvents) {
@@ -343,10 +410,14 @@ async function processReport(report, team, validEncounterIds, tierItemsByClass, 
   }
   log.verbose(`[wcl-sync] Report ${report.code}: ${snapshotRows.length} tier snapshot row(s)`);
 
-  // ── Completed reports only ───────────────────────────────────────────────────
-  const isComplete = Number(reportData.endTime) > 0;
-  if (!isComplete) {
-    log.verbose(`[wcl-sync] Report ${report.code}: still in progress — tier snapshot only`);
+  // ── Raids + Encounters ───────────────────────────────────────────────────────
+  // Filter fights: must be a boss encounter belonging to a configured zone
+  const validFights = fights.filter(
+    f => f.encounterID !== 0 && validEncounterIds.has(f.encounterID),
+  );
+
+  if (!validFights.length) {
+    log.verbose(`[wcl-sync] Report ${report.code}: no valid boss fights — skipping raids/encounters`);
     return { snapshotRows, raidRow: null, encounterRows: [] };
   }
 
@@ -410,3 +481,4 @@ async function processReport(report, team, validEncounterIds, tierItemsByClass, 
 
   return { snapshotRows, raidRow, encounterRows };
 }
+
