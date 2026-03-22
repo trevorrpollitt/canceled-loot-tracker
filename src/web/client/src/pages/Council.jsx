@@ -49,6 +49,24 @@ const TRACK_COLOR = {
   Mythic:   '#fbbf24',
 };
 
+const TRACK_LETTER = { Crafted: 'Cr', Veteran: 'V', Champion: 'C', Hero: 'H', Mythic: 'M' };
+const TRACK_CSS    = {
+  Crafted:  'track-crafted',
+  Veteran:  'track-veteran',
+  Champion: 'track-champion',
+  Hero:     'track-hero',
+  Mythic:   'track-mythic',
+};
+
+function MiniTrackBadge({ track }) {
+  if (!track || !TRACK_LETTER[track]) return null;
+  return (
+    <span className={`track-badge-mini ${TRACK_CSS[track]}`} title={track}>
+      {TRACK_LETTER[track]}
+    </span>
+  );
+}
+
 function TierPips({ tierSlots, activeSlot }) {
   const owned = Object.keys(tierSlots ?? {}).length;
   return (
@@ -236,10 +254,11 @@ function ItemGrid({ items, selectedItemId, onSelect }) {
   );
 }
 
-function BisIndicator({ match }) {
-  if (match === true)      return <span className="council-bis-yes" title="BIS match">✓</span>;
-  if (match === 'crafted') return <span className="council-bis-crafted" title="Crafted BIS">&lt;Crafted&gt;</span>;
-  return <span className="council-bis-no">—</span>;
+function BisIndicator({ match, track }) {
+  const badge = <MiniTrackBadge track={track} />;
+  if (match === true)      return <span className="council-bis-yes" title="BIS match">✓{badge}</span>;
+  if (match === 'crafted') return <span className="council-bis-crafted" title="Crafted BIS">&lt;Crafted&gt;{badge}</span>;
+  return <span className="council-bis-no">—{badge}</span>;
 }
 
 function BenchDot() {
@@ -247,6 +266,7 @@ function BenchDot() {
 }
 
 function CandidateRow({ c, isTierToken, itemSlot }) {
+  const worn = c.wornBis ?? {};
   return (
     <tr>
       <td className="council-col-char">
@@ -271,8 +291,15 @@ function CandidateRow({ c, isTierToken, itemSlot }) {
         <span className="council-stat-nonbis">{c.acctNonBisH}/{c.acctNonBisM}</span>
       </td>
       <td className="council-col-num">{c.raidsAttended}</td>
-      <td className="council-col-bis"><BisIndicator match={c.overallBisMatch} /></td>
-      <td className="council-col-bis"><BisIndicator match={c.raidBisMatch} /></td>
+      <td className="council-col-bis">
+        <BisIndicator match={c.overallBisMatch} track={worn.overallBISTrack} />
+      </td>
+      <td className="council-col-bis">
+        <BisIndicator match={c.raidBisMatch} track={worn.raidBISTrack} />
+      </td>
+      <td className="council-col-bis">
+        <MiniTrackBadge track={worn.otherTrack} />
+      </td>
     </tr>
   );
 }
@@ -364,8 +391,9 @@ function CandidateTable({ itemId, showAll, onToggle }) {
                 <th className="council-col-stats" title="Account BIS drops (Heroic/Mythic)">Acct BIS</th>
                 <th className="council-col-stats" title="Account Non-BIS drops (Heroic/Mythic)">Acct NB</th>
                 <th className="council-col-num" title="Raids attended">Raids</th>
-                <th className="council-col-bis">OvBIS</th>
-                <th className="council-col-bis">RaidBIS</th>
+                <th className="council-col-bis" title="Overall BIS match + worn track">OvBIS</th>
+                <th className="council-col-bis" title="Raid BIS match + worn track">RaidBIS</th>
+                <th className="council-col-bis" title="Best non-BIS track worn in this slot">Other</th>
               </tr>
             </thead>
             <tbody>

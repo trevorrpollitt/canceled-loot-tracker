@@ -70,8 +70,8 @@ export async function initTeams() {
     };
   }
 
-  // Load per-team config from each team's Config tab
-  for (const team of Object.values(TEAMS)) {
+  // Load per-team config from each team's Config tab — all teams in parallel
+  await Promise.all(Object.values(TEAMS).map(async (team) => {
     try {
       const config = await getConfig(team.sheetId);
       team.consoleChannelId = config.console_channel_id || null;
@@ -83,7 +83,7 @@ export async function initTeams() {
     } catch (err) {
       log.error(`[teams] Failed to load config for team "${team.name}":`, err.message);
     }
-  }
+  }));
   log.verbose('[teams] initTeams complete');
 }
 

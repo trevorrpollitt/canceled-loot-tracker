@@ -15,11 +15,12 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getDefaultBis, getDefaultBisOverrides, getItemDb, getSpecBisConfig, setSpecBisSource,
   applyRaidBisInference, updateDefaultBisOverrides, getBisSubmissions,
-  approveBisSubmission, rejectBisSubmission, getConfig,
+  approveBisSubmission, rejectBisSubmission, getConfig, clearWornBis,
+  invalidateWornBisSlots, getRoster,
 } from '../../../lib/sheets.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand } from '../../../lib/specs.js';
 import { getAllTeams } from '../../../lib/teams.js';
-import { runWclSyncForTeam } from '../../../lib/wcl-sync.js';
+import { runWclSyncForTeam, runWclSyncWornBisOnly } from '../../../lib/wcl-sync.js';
 
 const TIER_SLOTS     = new Set(['Head', 'Shoulders', 'Chest', 'Hands', 'Legs']);
 const CATALYST_SLOTS = new Set(['Neck', 'Back', 'Wrists', 'Waist', 'Feet']);
@@ -163,6 +164,36 @@ router.post('/default-bis', requireGlobalOfficer, async (c) => {
       trueBis:       u.trueBis,       trueBisItemId: u.trueBisItemId,
     }));
     await updateDefaultBisOverrides(writes);
+
+    // Invalidate worn BIS for all characters whose effective BIS for these slots came
+    // from spec defaults (i.e. they have no personal approved submission for the slot).
+    // Must cover all teams since default BIS is global.
+    const changedSlots = new Set(writes.map(w => w.slot));
+    const allTeams     = getAllTeams();
+    await Promise.all(allTeams.map(async team => {
+      const [roster, subs] = await Promise.all([
+        getRoster(team.sheetId),
+        getBisSubmissions(team.sheetId),
+      ]);
+      // Build set of charId+slot pairs that have a personal approved submission
+      const personalApproved = new Set(
+        subs
+          .filter(s => s.status === 'Approved' && s.charId && changedSlots.has(s.slot))
+          .map(s => `${s.charId}:${s.slot}`),
+      );
+      const targets = [];
+      for (const char of roster) {
+        if (!char.charId) continue;
+        if (toCanonical(char.spec) !== canonicalSpec) continue;
+        for (const slot of changedSlots) {
+          if (!personalApproved.has(`${char.charId}:${slot}`)) {
+            targets.push({ charId: char.charId, slot });
+          }
+        }
+      }
+      if (targets.length) await invalidateWornBisSlots(team.sheetId, targets);
+    }));
+
     return c.json({ ok: true, updated: writes.length });
   } catch (err) {
     console.error('[ADMIN] default-bis POST error:', err);
@@ -267,7 +298,17 @@ router.post('/bis-review/approve', requireOfficer, async (c) => {
   const { teamSheetId, charName: officerChar, username } = c.get('session').user;
   if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
   try {
+    // Look up the submission before approving so we can invalidate worn BIS for this slot
+    const subs = await getBisSubmissions(teamSheetId);
+    const sub  = subs.find(s => s.id === id);
+
     await approveBisSubmission(teamSheetId, id, officerChar ?? username ?? 'Officer');
+
+    // Invalidate worn BIS for this character+slot — the BIS definition has changed
+    if (sub?.charId && sub?.slot) {
+      await invalidateWornBisSlots(teamSheetId, [{ charId: sub.charId, slot: sub.slot }]);
+    }
+
     return c.json({ ok: true });
   } catch (err) {
     console.error('[ADMIN] bis-review approve error:', err);
@@ -314,6 +355,33 @@ router.post('/wcl-sync', requireOfficer, async (c) => {
   } catch (err) {
     console.error('[admin] WCL sync error:', err);
     return c.json({ error: err.message ?? 'Sync failed' }, 500);
+  }
+});
+
+router.post('/wcl-sync-worn-bis', requireOfficer, async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  const team = getAllTeams().find(t => t.sheetId === teamSheetId);
+  if (!team) return c.json({ error: 'Team not found' }, 404);
+  try {
+    await runWclSyncWornBisOnly(team);
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error('[admin] WCL worn BIS resync error:', err);
+    return c.json({ error: err.message ?? 'Sync failed' }, 500);
+  }
+});
+
+// ── DELETE /api/admin/worn-bis ─────────────────────────────────────────────────
+
+router.delete('/worn-bis', requireOfficer, async (c) => {
+  const { teamSheetId } = c.get('session').user;
+  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  try {
+    await clearWornBis(teamSheetId);
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error('[admin] worn-bis reset error:', err);
+    return c.json({ error: err.message ?? 'Reset failed' }, 500);
   }
 });
 

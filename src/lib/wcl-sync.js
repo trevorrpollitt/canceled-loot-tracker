@@ -62,6 +62,11 @@ import {
   getRaidEncounters,
   upsertRaidEncounters,
   upsertTierSnapshot,
+  getBisSubmissions,
+  getEffectiveDefaultBis,
+  getItemDb,
+  getWornBis,
+  upsertWornBis,
 } from './sheets.js';
 import {
   getValidEncounterIds,
@@ -69,6 +74,8 @@ import {
   getReportFights,
   getCombatantInfo,
 } from './wcl.js';
+import { matchesBis } from './bis-match.js';
+import { getArmorType, toCanonical } from './specs.js';
 
 // Upgrade tracks in order — each spans 8 consecutive bonus IDs from veteran_start
 const TRACK_NAMES = ['Veteran', 'Champion', 'Hero', 'Mythic'];
@@ -90,6 +97,137 @@ const DIFFICULTY_LABEL = {
   5:  'Mythic',
   10: 'LFR',
 };
+
+// WoW equipment slot index → canonical slot name (matches BIS Submissions slot column)
+const WCL_SLOT_MAP = {
+  0:  'Head',      1:  'Neck',       2:  'Shoulders',
+  /* 3 = Shirt — skip */
+  4:  'Chest',     5:  'Waist',      6:  'Legs',       7:  'Feet',
+  8:  'Wrists',    9:  'Hands',      10: 'Ring 1',     11: 'Ring 2',
+  12: 'Trinket 1', 13: 'Trinket 2',  14: 'Back',       15: 'Weapon',
+  16: 'Off-Hand',
+};
+
+// Paired slots — for rings and trinkets, an item in either physical slot can
+// satisfy either BIS entry (e.g. Ring 2 BIS worn in slot 1 still counts).
+const PAIRED_BIS_SLOTS = {
+  'Ring 1':    ['Ring 1', 'Ring 2'],
+  'Ring 2':    ['Ring 1', 'Ring 2'],
+  'Trinket 1': ['Trinket 1', 'Trinket 2'],
+  'Trinket 2': ['Trinket 1', 'Trinket 2'],
+};
+
+const TRACK_ORDER = { Crafted: -1, Veteran: 0, Champion: 1, Hero: 2, Mythic: 3 };
+
+/** Returns the higher of two track strings. Null/empty = lowest. */
+function mergeTrack(a, b) {
+  if (!a) return b ?? '';
+  if (!b) return a;
+  return (TRACK_ORDER[a] ?? -1) >= (TRACK_ORDER[b] ?? -1) ? a : b;
+}
+
+/** Returns track name for an item (from bonusIDs), or 'Unknown' if not found. */
+function getItemTrack(bonusIDs, trackRanges) {
+  for (const bonusId of bonusIDs ?? []) {
+    const row = trackRanges.find(r => bonusId >= r.bonusId && bonusId <= r.bonusId + 7);
+    if (row) return row.track;
+  }
+  return 'Unknown';
+}
+
+/**
+ * Extract worn BIS data from CombatantInfo events for a single report.
+ *
+ * Returns Map<`${charId}:${bisSlot}`, { charId, charName, slot, overallBISTrack, raidBISTrack, otherTrack }>
+ * For each character × slot, records the best upgrade track worn in each category.
+ * Items with Unknown track are skipped entirely.
+ */
+function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDbMap, trackRanges, craftedBonusIds) {
+  const result = new Map();
+
+  for (const event of combatantEvents) {
+    const actor = actors.find(a => a.id === event.sourceID);
+    if (!actor) continue;
+
+    const char = resolveActor(actor, rosterLookup);
+    if (!char) continue; // pug — skip
+
+    const armorType  = getArmorType(actor.subType); // actor.subType is the WoW class name
+    const charBisMap = bisLookup.get(char.charId) ?? bisLookup.get(`name:${char.charName.toLowerCase()}`);
+
+    for (const [slotIdx, slotName] of Object.entries(WCL_SLOT_MAP)) {
+      const gearItem = (event.gear ?? [])[Number(slotIdx)];
+      if (!gearItem || !gearItem.id || gearItem.id === 0) continue;
+
+      const rawTrack = getItemTrack(gearItem.bonusIDs, trackRanges);
+      // Crafted items are identified by a specific bonus ID in the global config
+      // (wcl_crafted_bonus_ids). They have no upgrade-track bonus IDs so rawTrack
+      // will be 'Unknown', but we still record them as 'Crafted' for BIS/Other slots.
+      // Other Unknown-track items (old gear, world drops, etc.) are skipped.
+      const matchedCraftedId = rawTrack === 'Unknown'
+        ? (gearItem.bonusIDs ?? []).find(id => craftedBonusIds.has(id))
+        : undefined;
+      const isCrafted = matchedCraftedId !== undefined;
+      if (rawTrack === 'Unknown') {
+        log.verbose(`[worn-bis] ${char.charName} slot ${slotName} item ${gearItem.id}: Unknown track — bonusIDs=[${(gearItem.bonusIDs ?? []).join(',')}] isCrafted=${isCrafted}${isCrafted ? ` (matched ${matchedCraftedId})` : ''}`);
+        if (!isCrafted) continue;
+      }
+
+      const dbEntry = itemDbMap.get(Number(gearItem.id));
+      // Build item shape for matchesBis
+      const itemShape = {
+        itemId:      String(gearItem.id),
+        name:        dbEntry?.name ?? '',
+        slot:        dbEntry?.slot ?? '',
+        armorType:   dbEntry?.armorType ?? '',
+        isTierToken: dbEntry?.isTierToken ?? false,
+      };
+
+      // Slots to check against BIS entries (rings/trinkets pair with both)
+      const bisSlots = PAIRED_BIS_SLOTS[slotName] ?? [slotName];
+
+      let matchedAnyBis = false;
+
+      for (const bisSlot of bisSlots) {
+        const charBis = charBisMap?.get(bisSlot);
+        if (!charBis) continue;
+
+        // <Catalyst>: any item worn in this slot qualifies — characters can only
+        // equip their own armor type, so the armor-type check is already implicit.
+        const matchesOverall = (isCrafted && charBis.trueBis === '<Crafted>') ||
+          charBis.trueBis === '<Catalyst>' ||
+          matchesBis(charBis.trueBis, charBis.trueBisItemId, itemShape, armorType, bisSlot);
+        const matchesRaid    = (isCrafted && charBis.raidBis === '<Crafted>') ||
+          charBis.raidBis === '<Catalyst>' ||
+          matchesBis(charBis.raidBis, charBis.raidBisItemId, itemShape, armorType, bisSlot);
+
+        if (!matchesOverall && !matchesRaid) continue;
+        matchedAnyBis = true;
+
+        const recordTrack = isCrafted ? 'Crafted' : rawTrack;
+        const key  = `${char.charId}:${bisSlot}`;
+        const prev = result.get(key) ?? { charId: char.charId, charName: char.charName, slot: bisSlot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+        result.set(key, {
+          ...prev,
+          overallBISTrack: matchesOverall ? mergeTrack(prev.overallBISTrack, recordTrack) : prev.overallBISTrack,
+          raidBISTrack:    matchesRaid    ? mergeTrack(prev.raidBISTrack,    recordTrack) : prev.raidBISTrack,
+        });
+      }
+
+      // If item didn't match any BIS entry, record it under the physical slot as Other.
+      // Crafted items (Unknown track) get 'Crafted' so the row still exists — name-based
+      // BIS matching is impossible without the item name, which WCL gear data omits.
+      if (!matchedAnyBis) {
+        const key      = `${char.charId}:${slotName}`;
+        const prev     = result.get(key) ?? { charId: char.charId, charName: char.charName, slot: slotName, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+        const otherVal = isCrafted ? 'Crafted' : rawTrack;
+        result.set(key, { ...prev, otherTrack: mergeTrack(prev.otherTrack, otherVal) });
+      }
+    }
+  }
+
+  return result;
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -156,8 +294,12 @@ function resolveActor(actor, rosterLookup) {
  */
 async function buildWclContext() {
   const globalConfig = await getGlobalConfig();
-  const { wcl_client_id, wcl_zone_ids, season_start, wcl_veteran_bonus_id } = globalConfig;
+  const { wcl_client_id, wcl_zone_ids, season_start, wcl_veteran_bonus_id, wcl_crafted_bonus_ids } = globalConfig;
   const trackRanges      = buildTrackRanges(Number(wcl_veteran_bonus_id) || 0);
+  // Pipe-separated list of bonus IDs that identify crafted items, e.g. "9481|9513|9484"
+  const craftedBonusIds  = new Set(
+    String(wcl_crafted_bonus_ids ?? '').split('|').map(Number).filter(Boolean)
+  );
   const wcl_client_secret = process.env.WCL_CLIENT_SECRET;
 
   if (!wcl_client_id || !wcl_client_secret) throw new Error('WCL credentials not configured');
@@ -172,6 +314,9 @@ async function buildWclContext() {
   if (!trackRanges.length) {
     log.warn('[wcl-sync] wcl_veteran_bonus_id not set in Global Config — tier track detection will show Unknown');
   }
+  if (!craftedBonusIds.size) {
+    log.warn('[wcl-sync] wcl_crafted_bonus_ids not set in Global Config — crafted items will not be detected');
+  }
   log.verbose(`[wcl-sync] Valid encounter IDs: [${[...validEncounterIds].join(', ')}]`);
 
   const tierItemRows     = await getTierItems();
@@ -181,7 +326,13 @@ async function buildWclContext() {
     tierItemsByClass.get(cls).set(Number(itemId), slot);
   }
 
-  return { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, seasonStartMs, wcl_client_id, wcl_client_secret };
+  const itemDbRows = await getItemDb();
+  const itemDbMap  = new Map();
+  for (const row of itemDbRows) {
+    itemDbMap.set(Number(row.itemId), { slot: row.slot, armorType: row.armorType, isTierToken: row.isTierToken, name: row.name });
+  }
+
+  return { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap };
 }
 
 /**
@@ -197,11 +348,11 @@ export async function runWclSync() {
     log.error('[wcl-sync] Setup failed:', err.message);
     return;
   }
-  const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, seasonStartMs, wcl_client_id, wcl_client_secret } = ctx;
+  const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap } = ctx;
 
   for (const team of getAllTeams()) {
     try {
-      await syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, seasonStartMs, wcl_client_id, wcl_client_secret);
+      await syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap);
     } catch (err) {
       log.error(`[wcl-sync] Team "${team.name}" sync failed:`, err.message);
     }
@@ -218,16 +369,25 @@ export async function runWclSync() {
 export async function runWclSyncForTeam(team) {
   log.warn(`[wcl-sync] Manual sync triggered for team "${team.name}"`);
   const ctx = await buildWclContext();
-  const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, seasonStartMs, wcl_client_id, wcl_client_secret } = ctx;
-  await syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, seasonStartMs, wcl_client_id, wcl_client_secret);
+  const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap } = ctx;
+  await syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap);
   log.warn(`[wcl-sync] Manual sync complete for team "${team.name}"`);
+}
+
+export async function runWclSyncWornBisOnly(team) {
+  log.warn(`[wcl-sync] Worn BIS-only resync triggered for team "${team.name}"`);
+  const ctx = await buildWclContext();
+  const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap } = ctx;
+  await syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap, { wornBisOnly: true });
+  log.warn(`[wcl-sync] Worn BIS-only resync complete for team "${team.name}"`);
 }
 
 // ── Per-team sync ──────────────────────────────────────────────────────────────
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, seasonStartMs, clientId, clientSecret) {
+async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, clientId, clientSecret, itemDbMap, options = {}) {
+  const { wornBisOnly = false } = options;
   const config     = await getConfig(team.sheetId);
   const wclGuildId = config.wcl_guild_id ? Number(config.wcl_guild_id) : null;
 
@@ -242,7 +402,9 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
   // timestamp for a raid log will be > Jan 1 2020 (1577836800000).
   const MIN_VALID_MS = 1577836800000; // Jan 1 2020
   const rawLastCheck = Number(config.wcl_last_check);
-  const lastCheckMs  = (rawLastCheck && rawLastCheck > MIN_VALID_MS) ? rawLastCheck : seasonStartMs;
+  const lastCheckMs  = wornBisOnly
+    ? seasonStartMs  // reprocess all season reports so best-ever tracks are accurate
+    : (rawLastCheck && rawLastCheck > MIN_VALID_MS) ? rawLastCheck : seasonStartMs;
   log.verbose(`[wcl-sync] Team "${team.name}": fetching reports since ${new Date(lastCheckMs).toISOString()}`);
 
   // Parse pending re-check map: code → { startTime, storedEndTime, zoneName }
@@ -285,11 +447,43 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
   const roster       = await getRoster(team.sheetId);
   const rosterLookup = buildRosterLookup(roster);
 
+  // Build BIS lookup per character: effective BIS = personal approved submission > spec default.
+  // Keyed by charId when present; falls back to "name:<charName>" for un-migrated rows.
+  const [allSubs, effectiveDefaultBis] = await Promise.all([
+    getBisSubmissions(team.sheetId),
+    getEffectiveDefaultBis(),
+  ]);
+
+  // Group defaults by spec for fast lookup
+  const defaultBisBySpec = new Map();
+  for (const row of effectiveDefaultBis) {
+    if (!defaultBisBySpec.has(row.spec)) defaultBisBySpec.set(row.spec, []);
+    defaultBisBySpec.get(row.spec).push(row);
+  }
+
+  const bisLookup = new Map();
+  for (const char of roster) {
+    const slots = new Map();
+    // Seed from spec defaults
+    for (const row of defaultBisBySpec.get(toCanonical(char.spec)) ?? []) {
+      slots.set(row.slot, { trueBis: row.trueBis, trueBisItemId: row.trueBisItemId, raidBis: row.raidBis, raidBisItemId: row.raidBisItemId });
+    }
+    // Override with personal approved submissions (charId match preferred, charName fallback)
+    for (const sub of allSubs.filter(s => s.status === 'Approved' && (s.charId ? s.charId === char.charId : s.charName.toLowerCase() === char.charName.toLowerCase()))) {
+      slots.set(sub.slot, { trueBis: sub.trueBis, trueBisItemId: sub.trueBisItemId, raidBis: sub.raidBis, raidBisItemId: sub.raidBisItemId });
+    }
+    const key = char.charId || `name:${char.charName.toLowerCase()}`;
+    bisLookup.set(key, slots);
+  }
+
+  const existingWornBis = await getWornBis(team.sheetId); // Map<charId:slot, row>
+
   // Accumulate data from all reports before writing — reduces Sheets API calls from
   // O(reports × characters) to O(1 read + 1 batchUpdate) per tab per team sync.
   const allSnapshots    = new Map(); // charId → snapshotRow (latest report wins; sorted asc)
   const allRaidRows     = [];
   const allEncounterRows = [];
+  const allWornBis      = new Map(); // charId:slot → row (keeps max track per category)
   const newPending      = new Map(); // code → { startTime, storedEndTime, zoneName }
 
   for (let i = 0; i < allReports.length; i++) {
@@ -320,7 +514,7 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
         log.warn(`[wcl-sync] Report ${report.code}: endTime updated — reprocessing`);
       }
 
-      const result = await processReport(report, reportData, validEncounterIds, tierItemsByClass, trackRanges, rosterLookup, seasonStartMs, clientId, clientSecret);
+      const result = await processReport(report, reportData, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, rosterLookup, seasonStartMs, clientId, clientSecret, bisLookup, itemDbMap);
 
       // Track all recent reports for re-check regardless of result
       if (Date.now() - report.startTime < DAY_MS) {
@@ -328,10 +522,25 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
       }
 
       if (!result) continue;
-      const { snapshotRows, raidRow, encounterRows } = result;
+      const { snapshotRows, raidRow, encounterRows, wornBisRows } = result;
       for (const snap of snapshotRows) allSnapshots.set(snap.charId, snap);
       if (raidRow) allRaidRows.push(raidRow);
       allEncounterRows.push(...encounterRows);
+
+      // Merge worn BIS rows into accumulator (keep max track per category)
+      for (const [key, row] of wornBisRows) {
+        if (allWornBis.has(key)) {
+          const prev = allWornBis.get(key);
+          allWornBis.set(key, {
+            ...prev,
+            overallBISTrack: mergeTrack(prev.overallBISTrack, row.overallBISTrack),
+            raidBISTrack:    mergeTrack(prev.raidBISTrack, row.raidBISTrack),
+            otherTrack:      mergeTrack(prev.otherTrack, row.otherTrack),
+          });
+        } else {
+          allWornBis.set(key, row);
+        }
+      }
     } catch (err) {
       log.error(`[wcl-sync] Team "${team.name}" report ${report.code} failed:`, err.message);
     }
@@ -339,32 +548,52 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
 
   // Bulk-write all accumulated data (one read + one batchUpdate per tab)
   const snapshotList = [...allSnapshots.values()];
-  if (snapshotList.length) {
-    log.warn(`[wcl-sync] Team "${team.name}": writing ${snapshotList.length} tier snapshot row(s)`);
-    await upsertTierSnapshot(team.sheetId, snapshotList);
-  }
-  if (allRaidRows.length) {
-    log.warn(`[wcl-sync] Team "${team.name}": writing ${allRaidRows.length} raid row(s)`);
-    await upsertRaids(team.sheetId, allRaidRows);
-  }
-  if (allEncounterRows.length) {
-    log.warn(`[wcl-sync] Team "${team.name}": writing ${allEncounterRows.length} encounter row(s)`);
-    await upsertRaidEncounters(team.sheetId, allEncounterRows);
+  if (!wornBisOnly) {
+    if (snapshotList.length) {
+      log.warn(`[wcl-sync] Team "${team.name}": writing ${snapshotList.length} tier snapshot row(s)`);
+      await upsertTierSnapshot(team.sheetId, snapshotList);
+    }
+    if (allRaidRows.length) {
+      log.warn(`[wcl-sync] Team "${team.name}": writing ${allRaidRows.length} raid row(s)`);
+      await upsertRaids(team.sheetId, allRaidRows);
+    }
+    if (allEncounterRows.length) {
+      log.warn(`[wcl-sync] Team "${team.name}": writing ${allEncounterRows.length} encounter row(s)`);
+      await upsertRaidEncounters(team.sheetId, allEncounterRows);
+    }
   }
 
-  // Advance cursor; persist pending re-checks (reports < 24h old)
-  await setConfigValue(team.sheetId, 'wcl_last_check', String(Date.now()));
-  await setConfigValue(team.sheetId, 'wcl_pending_reports',
-    [...newPending.entries()].map(([code, d]) => `${code}:${d.startTime}:${d.storedEndTime}:${d.zoneName}`).join('|'),
-  );
+  // Merge accumulated worn BIS with existing sheet data (best-ever logic), then write
+  if (allWornBis.size) {
+    const wornBisToWrite = [];
+    for (const [key, row] of allWornBis) {
+      const existing = existingWornBis.get(key);
+      wornBisToWrite.push({
+        ...row,
+        overallBISTrack: mergeTrack(existing?.overallBISTrack, row.overallBISTrack),
+        raidBISTrack:    mergeTrack(existing?.raidBISTrack, row.raidBISTrack),
+        otherTrack:      mergeTrack(existing?.otherTrack, row.otherTrack),
+      });
+    }
+    log.warn(`[wcl-sync] Team "${team.name}": writing ${wornBisToWrite.length} worn BIS row(s)`);
+    await upsertWornBis(team.sheetId, wornBisToWrite);
+  }
+
+  if (!wornBisOnly) {
+    // Advance cursor; persist pending re-checks (reports < 24h old)
+    await setConfigValue(team.sheetId, 'wcl_last_check', String(Date.now()));
+    await setConfigValue(team.sheetId, 'wcl_pending_reports',
+      [...newPending.entries()].map(([code, d]) => `${code}:${d.startTime}:${d.storedEndTime}:${d.zoneName}`).join('|'),
+    );
+  }
 }
 
 // ── Per-report data extraction ─────────────────────────────────────────────────
 // reportData is pre-fetched by the caller (syncTeam) so endTime can be checked
 // before deciding whether to reprocess. Returns { snapshotRows, raidRow,
-// encounterRows } or null if there is nothing to write.
+// encounterRows, wornBisRows } or null if there is nothing to write.
 
-async function processReport(report, reportData, validEncounterIds, tierItemsByClass, trackRanges, rosterLookup, seasonStartMs, clientId, clientSecret) {
+async function processReport(report, reportData, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, rosterLookup, seasonStartMs, clientId, clientSecret, bisLookup, itemDbMap) {
   // Cheap pre-filter: skip anything before season start
   if (report.startTime < seasonStartMs) {
     log.verbose(`[wcl-sync] Report ${report.code}: before season start — skipping`);
@@ -410,6 +639,38 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
   }
   log.verbose(`[wcl-sync] Report ${report.code}: ${snapshotRows.length} tier snapshot row(s)`);
 
+  // ── Worn BIS ─────────────────────────────────────────────────────────────────
+  const wornBisRows = extractWornBis(combatantEvents, actors, rosterLookup, bisLookup ?? new Map(), itemDbMap ?? new Map(), trackRanges, craftedBonusIds ?? new Set());
+
+  // For slots where BIS is <Tier>, extractWornBis can't match (it doesn't have
+  // tierItemsByClass). Pull the track from snapshotRows instead.
+  for (const snap of snapshotRows) {
+    if (!snap.tierDetail) continue;
+    const charBisMap = (bisLookup ?? new Map()).get(snap.charId)
+                    ?? (bisLookup ?? new Map()).get(`name:${snap.charName.toLowerCase()}`);
+    if (!charBisMap) continue;
+    for (const piece of snap.tierDetail.split('|').filter(Boolean)) {
+      const colonIdx = piece.lastIndexOf(':');
+      if (colonIdx < 0) continue;
+      const slot  = piece.slice(0, colonIdx);
+      const track = piece.slice(colonIdx + 1);
+      if (!track || track === 'Unknown') continue;
+      const charBis = charBisMap.get(slot);
+      if (!charBis) continue;
+      const matchesOverall = charBis.trueBis === '<Tier>';
+      const matchesRaid    = charBis.raidBis  === '<Tier>';
+      if (!matchesOverall && !matchesRaid) continue;
+      const key  = `${snap.charId}:${slot}`;
+      const prev = wornBisRows.get(key) ?? { charId: snap.charId, charName: snap.charName, slot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+      wornBisRows.set(key, {
+        ...prev,
+        overallBISTrack: matchesOverall ? mergeTrack(prev.overallBISTrack, track) : prev.overallBISTrack,
+        raidBISTrack:    matchesRaid    ? mergeTrack(prev.raidBISTrack, track)    : prev.raidBISTrack,
+      });
+    }
+  }
+  log.verbose(`[wcl-sync] Report ${report.code}: ${wornBisRows.size} worn BIS entry(s)`);
+
   // ── Raids + Encounters ───────────────────────────────────────────────────────
   // Filter fights: must be a boss encounter belonging to a configured zone
   const validFights = fights.filter(
@@ -418,7 +679,7 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
 
   if (!validFights.length) {
     log.verbose(`[wcl-sync] Report ${report.code}: no valid boss fights — skipping raids/encounters`);
-    return { snapshotRows, raidRow: null, encounterRows: [] };
+    return { snapshotRows, raidRow: null, encounterRows: [], wornBisRows };
   }
 
   // ── Raids row ────────────────────────────────────────────────────────────────
@@ -479,6 +740,6 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
   }
   log.verbose(`[wcl-sync] Report ${report.code}: ${encounterRows.length} encounter row(s)`);
 
-  return { snapshotRows, raidRow, encounterRows };
+  return { snapshotRows, raidRow, encounterRows, wornBisRows };
 }
 

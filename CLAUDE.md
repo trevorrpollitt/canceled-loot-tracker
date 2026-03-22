@@ -188,6 +188,19 @@ Column order is the source of truth. Tabs marked **[master]** live in the master
 - Characters not on the roster (pugs) are skipped
 - Used by council view to show tier piece status per candidate
 
+### Worn BIS (A=CharId B=CharName C=Slot D=OverallBISTrack E=RaidBISTrack F=OtherTrack G=UpdatedAt)
+- One row per character × slot (~16 slots per character)
+- Upsert key: CharId (col A) + Slot (col C) composite
+- Records the **highest upgrade track** ever worn in each BIS category for that slot
+- OverallBISTrack: highest track worn for an item matching the character's approved Overall BIS
+- RaidBISTrack: highest track worn for an item matching the character's approved Raid BIS
+- OtherTrack: highest track worn for any item in this slot that isn't their Overall or Raid BIS
+- Track values: `Veteran | Champion | Hero | Mythic` or empty string (never worn at a known track)
+- Tracks never decrease — values are merged with existing sheet data on each sync run (best-ever)
+- Items with unrecognised bonus IDs (Unknown track) are skipped entirely
+- Characters not on the roster (pugs) are skipped
+- Reset manually per season via Admin page → "Reset Worn BIS Data"
+
 ### Tier Items **[master]** (A=Class B=Slot C=ItemId)
 - Current season's tier piece item IDs, one row per class × slot (13 classes × 5 slots = 65 rows)
 - Seeded via web app `/admin` → Sync Tier Items (Blizzard API)
@@ -201,6 +214,7 @@ Guild-wide settings shared across all teams:
 - `wcl_client_id`          — Warcraft Logs OAuth client ID (non-sensitive, fine in sheet)
 - `wcl_zone_ids`           — pipe-separated WCL zone IDs for current tier (e.g. "38|41"); fights outside these zones are excluded from sync
 - `wcl_veteran_bonus_id`   — start bonus ID of the Veteran upgrade track; each track uses 8 consecutive IDs, so Champion = veteran+8, Hero = veteran+16, Mythic = veteran+24; update each new season (Midnight S1: 12777)
+- `wcl_crafted_bonus_ids`  — pipe-separated bonus IDs that identify crafted items in WCL gear data (e.g. "9481|9513"); items matching any of these IDs are recorded as track 'Crafted' instead of being skipped; update each new season
 - `wcl_client_secret` is **not** stored here — env var `WCL_CLIENT_SECRET` only (Cloudflare Worker secret in prod, `.dev.vars` locally)
 
 ### Config (A=Key B=Value) — per team
@@ -356,6 +370,21 @@ accessory slots. This is a UI constraint only — validate it on form submit too
 - All Sheets access goes through `src/lib/sheets.js` — never import googleapis elsewhere
 - Route handlers live in `src/web/server/routes/` — one file per route group
 - Error responses: `{ error: 'message' }` JSON with appropriate HTTP status
+
+## Sheets read/write efficiency — always consider this when designing features
+Google Sheets API has strict rate limits (60 req/min per user). Every design decision must account for this.
+
+**Reading:**
+- Use `primeTeamCache(sheetId, [...tabKeys])` at the top of route handlers to batch-load all needed team tabs in one API call, then call individual `get*` functions which hit cache
+- Master sheet reads (`getItemDb`, `getEffectiveDefaultBis`, etc.) run in parallel with `primeTeamCache` via `Promise.all`
+- New `get*` functions must use `cachedRead` — never call `readRange` directly from a route or exported function
+- New tabs added to team sheets must be added to `TEAM_TAB_DEFS` in `sheets.js` with a range and pure parse function
+- `cachedRead` has in-flight deduplication: concurrent requests for the same key share one promise automatically
+
+**Writing:**
+- Every write function (`upsert*`, `clear*`, etc.) must call `cacheInvalidate(sheetId, tabKey)` after writing so the next read reflects the change
+- Batch multiple cell writes into `batchWriteRanges` — never loop individual `writeRange` calls
+- Prefer upsert patterns (read once, compute updates/appends, write once) over read-modify-write per row
 
 ## Guild branding
 - Name: **Canceled**

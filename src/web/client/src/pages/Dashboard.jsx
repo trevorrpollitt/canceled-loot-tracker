@@ -14,6 +14,28 @@ const SENTINELS = new Set(['<Tier>', '<Catalyst>', '<Crafted>']);
 
 const DIFFICULTY_ORDER = ['Mythic', 'Heroic', 'Normal'];
 
+const TRACK_CLASS = {
+  Crafted:  'track-crafted',
+  Veteran:  'track-veteran',
+  Champion: 'track-champion',
+  Hero:     'track-hero',
+  Mythic:   'track-mythic',
+};
+
+// Crafted sits below all real tracks so a Veteran drop always supersedes it
+const TRACK_ORDER = { Crafted: -1, Veteran: 0, Champion: 1, Hero: 2, Mythic: 3 };
+function bestTrack(...tracks) {
+  // Prefer real tracks over Crafted; only show Crafted if nothing else is present
+  return tracks.reduce((best, t) =>
+    t && (TRACK_ORDER[t] ?? -2) > (TRACK_ORDER[best] ?? -2) ? t : best
+  , '');
+}
+
+function TrackBadge({ track }) {
+  if (!track) return null;
+  return <span className={`track-badge ${TRACK_CLASS[track] ?? ''}`}>{track}</span>;
+}
+
 const UPGRADE_BADGE = {
   'BIS':      { label: 'BIS',      className: 'badge-bis'      },
   'Non-BIS':  { label: 'Non-BIS',  className: 'badge-nonbis'   },
@@ -103,7 +125,7 @@ function LootTable({ loot }) {
 
 // ── BIS section ───────────────────────────────────────────────────────────────
 
-function BisTable({ bis, specDefaults, loot }) {
+function BisTable({ bis, specDefaults, loot, wornBis = {} }) {
   // Personal approved submissions take priority over spec defaults
   const personalBySlot = Object.fromEntries(bis.map(b => [b.slot, b]));
   const defaultBySlot  = Object.fromEntries(specDefaults.map(d => [d.slot, d]));
@@ -132,7 +154,15 @@ function BisTable({ bis, specDefaults, loot }) {
     const received = overall && !SENTINELS.has(overall) &&
                      receivedBis.has(overall.toLowerCase());
 
-    return [{ slot, overall, overallId, raid, raidId, isPersonal, received }];
+    const worn = wornBis[slot] ?? {};
+    // If Overall and Raid BIS resolve to the same item, the raid track badge should
+    // show whatever the overall track is (they're wearing the same piece).
+    const effectiveRaidTrack = worn.raidBISTrack ||
+      (raid && overall && raid === overall ? worn.overallBISTrack : '');
+    const displayWorn = { ...worn, raidBISTrack: effectiveRaidTrack };
+    const maxed    = worn.overallBISTrack === 'Mythic';
+    const slotBest = bestTrack(worn.overallBISTrack, worn.raidBISTrack, worn.otherTrack);
+    return [{ slot, overall, overallId, raid, raidId, isPersonal, received, worn: displayWorn, maxed, slotBest }];
   });
 
   if (!rows.length) return <p className="empty">No BIS data available for this spec.</p>;
@@ -144,7 +174,7 @@ function BisTable({ bis, specDefaults, loot }) {
           <th>Slot</th>
           <th>Overall BIS</th>
           <th>Raid BIS</th>
-          <th></th>
+          <th className="bis-col-best">Best</th>
         </tr>
       </thead>
       <tbody>
@@ -156,8 +186,8 @@ function BisTable({ bis, specDefaults, loot }) {
               <tr className="bis-group-header-row">
                 <td colSpan={4} className="bis-group-header">{group.label}</td>
               </tr>
-              {groupRows.map(({ slot, overall, overallId, raid, raidId, isPersonal, received }) => (
-                <tr key={slot} className={received ? 'bis-row-received' : ''}>
+              {groupRows.map(({ slot, overall, overallId, raid, raidId, isPersonal, received, worn, maxed, slotBest }) => (
+                <tr key={slot} className={maxed ? 'bis-row-received' : ''}>
                   <td className="bis-slot">{slot}</td>
                   <td>
                     <ItemLink
@@ -166,6 +196,7 @@ function BisTable({ bis, specDefaults, loot }) {
                       className={SENTINELS.has(overall) ? 'bis-sentinel' : undefined}
                     />
                     {isPersonal && <span className="badge badge-personal">Personal</span>}
+                    <TrackBadge track={worn.overallBISTrack} />
                   </td>
                   <td>
                     <ItemLink
@@ -173,10 +204,9 @@ function BisTable({ bis, specDefaults, loot }) {
                       itemId={raidId}
                       className={SENTINELS.has(raid) ? 'bis-sentinel' : 'text-muted'}
                     />
+                    <TrackBadge track={worn.raidBISTrack} />
                   </td>
-                  <td className="bis-check">
-                    {received && <span className="bis-received-mark">✓</span>}
-                  </td>
+                  <td className="bis-col-best"><TrackBadge track={slotBest} /></td>
                 </tr>
               ))}
             </Fragment>
@@ -350,6 +380,7 @@ export default function Dashboard() {
           bis={data.bis}
           specDefaults={data.specDefaults}
           loot={data.loot}
+          wornBis={data.wornBis ?? {}}
         />
       </section>
 

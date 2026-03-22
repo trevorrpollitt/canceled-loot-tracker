@@ -371,12 +371,20 @@ a:hover { color: var(--primary-h); }
 
 .bis-slot         { font-weight: 500; white-space: nowrap; width: 120px; }
 .bis-sentinel     { color: var(--text-muted); font-style: italic; }
-.bis-check        { width: 32px; text-align: center; }
-.bis-received-mark{ color: var(--bis); font-weight: 700; }
+.bis-col-best     { width: 1px; white-space: nowrap; text-align: center; padding-left: 12px; }
 .bis-row-received td { opacity: 0.55; }
 
 .badge-personal   { background: rgba(204,16,16,0.15); color: var(--primary); margin-left: 8px; }
 .text-muted       { color: var(--text-muted); }
+
+/* Upgrade track badges (Worn BIS) */
+.track-badge      { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; opacity: 0.9; }
+.track-badge-mini { display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0 4px; border-radius: 3px; margin-left: 4px; vertical-align: middle; opacity: 0.85; letter-spacing: 0; }
+.track-crafted  { background: rgba(210,140,30,0.18); color: #d4a847; }
+.track-veteran  { background: rgba(140,140,140,0.2); color: #aaa; }
+.track-champion { background: rgba(30,180,80,0.18);  color: #4dcc7a; }
+.track-hero     { background: rgba(50,140,240,0.2);  color: #5aabf0; }
+.track-mythic   { background: rgba(160,90,230,0.2);  color: #b87de8; }
 
 /* Wowhead tooltip links — keep colours consistent with the dark theme */
 a.wh-link         { color: var(--text); }

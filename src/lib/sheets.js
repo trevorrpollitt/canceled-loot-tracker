@@ -157,6 +157,11 @@ function cacheInvalidate(sheetId, ...tabKeys) {
   for (const k of tabKeys) _cache.delete(`${sheetId}|${k}`);
 }
 
+// In-flight deduplication: if multiple concurrent requests miss the cache for the
+// same key simultaneously, they all share one in-flight promise instead of each
+// firing their own API call.  Prevents stampedes on cold start.
+const _inFlight = new Map(); // `${sheetId}|${tabKey}` → Promise
+
 async function cachedRead(sheetId, tabKey, fn) {
   const key    = `${sheetId}|${tabKey}`;
   const cached = cacheGet(key);
@@ -164,12 +169,23 @@ async function cachedRead(sheetId, tabKey, fn) {
     log.verbose(`[sheets] cache hit  ${tabKey} (sheet ${sheetId.slice(-6)})`);
     return cached;
   }
+  if (_inFlight.has(key)) {
+    log.verbose(`[sheets] in-flight  ${tabKey} (sheet ${sheetId.slice(-6)}) — joining existing request`);
+    return _inFlight.get(key);
+  }
   log.verbose(`[sheets] cache miss ${tabKey} (sheet ${sheetId.slice(-6)}) — fetching`);
-  const result = await fn();
-  cacheSet(key, result);
-  const count = result instanceof Map ? result.size : Array.isArray(result) ? result.length : 1;
-  log.verbose(`[sheets] cached     ${tabKey} (sheet ${sheetId.slice(-6)}) — ${count} entries`);
-  return result;
+  const promise = fn().then(result => {
+    cacheSet(key, result);
+    _inFlight.delete(key);
+    const count = result instanceof Map ? result.size : Array.isArray(result) ? result.length : 1;
+    log.verbose(`[sheets] cached     ${tabKey} (sheet ${sheetId.slice(-6)}) — ${count} entries`);
+    return result;
+  }).catch(err => {
+    _inFlight.delete(key);
+    throw err;
+  });
+  _inFlight.set(key, promise);
+  return promise;
 }
 
 // ── Master sheet accessor ─────────────────────────────────────────────────────
@@ -202,6 +218,24 @@ export async function readRange(sheetId, range) {
   const values = res.values ?? [];
   log.verbose(`[sheets] readRange  ${range} → ${values.length} rows`);
   return values;
+}
+
+/**
+ * Fetch multiple ranges from the same spreadsheet in a single HTTP call.
+ * Returns an array of value matrices in the same order as `ranges`.
+ *
+ * @param {string}   sheetId
+ * @param {string[]} ranges  A1 notation ranges, e.g. ["Roster!A2:I", "Loot Log!A2:K"]
+ * @returns {Array<Array<Array<string>>>}
+ */
+async function readBatchRanges(sheetId, ranges) {
+  if (!ranges.length) return [];
+  log.verbose(`[sheets] batchGet   ${ranges.length} range(s) (sheet ${sheetId.slice(-6)}): ${ranges.join(', ')}`);
+  const qs = new URLSearchParams({ valueRenderOption: 'UNFORMATTED_VALUE' });
+  for (const r of ranges) qs.append('ranges', r);
+  const url = `${SHEETS_BASE}/${sheetId}/values:batchGet?${qs}`;
+  const res = await withRetry(() => sheetsRequest('GET', url));
+  return (res.valueRanges ?? []).map(vr => vr.values ?? []);
 }
 
 /**
@@ -271,6 +305,170 @@ function normalizeSheetDate(val) {
 // Return plain JS objects so handler code never touches raw cell arrays.
 // Column order must match the sheet schema in CLAUDE.md exactly.
 
+// ── Row parsers (pure functions, used by both cachedRead and primeTeamCache) ──
+
+function parseRosterRows(rows) {
+  return rows
+    .map(r => ({
+      charName:  String(r[0] ?? '').trim(),
+      class:     String(r[1] ?? '').trim(),
+      spec:      String(r[2] ?? '').trim(),
+      role:      String(r[3] ?? '').trim(),
+      status:    String(r[4] ?? '').trim(),
+      ownerId:   String(r[5] ?? '').trim(),
+      ownerNick: String(r[6] ?? '').trim(),
+      charId:    String(r[7] ?? '').trim(),
+      server:    String(r[8] ?? '').trim(),
+    }))
+    .filter(c => c.charName && c.status.toLowerCase() !== 'deleted');
+}
+
+function parseLootLogRows(rows) {
+  return rows
+    .map(r => ({
+      id:              r[0] ?? '',
+      raidId:          r[1] ?? '',
+      date:            normalizeSheetDate(r[2]),
+      boss:            r[3] ?? '',
+      itemName:        r[4] ?? '',
+      difficulty:      r[5] ?? '',
+      recipientId:     r[6] ?? '',
+      recipientChar:   r[7] ?? '',
+      upgradeType:     r[8] ?? '',
+      notes:           r[9] ?? '',
+      recipientCharId: String(r[10] ?? '').trim(),
+    }))
+    .filter(e => e.id);
+}
+
+function parseBisRows(rows) {
+  return rows
+    .map(r => ({
+      id:            String(r[0]  ?? '').trim(),
+      charName:      String(r[1]  ?? '').trim(),
+      spec:          String(r[2]  ?? '').trim(),
+      slot:          String(r[3]  ?? '').trim(),
+      trueBis:       String(r[4]  ?? '').trim(),
+      raidBis:       String(r[5]  ?? '').trim(),
+      rationale:     String(r[6]  ?? '').trim(),
+      status:        String(r[7]  ?? 'Pending').trim(),
+      submittedAt:   String(r[8]  ?? '').trim(),
+      reviewedBy:    String(r[9]  ?? '').trim(),
+      officerNote:   String(r[10] ?? '').trim(),
+      trueBisItemId: String(r[11] ?? '').trim(),
+      raidBisItemId: String(r[12] ?? '').trim(),
+      charId:        String(r[13] ?? '').trim(),
+    }))
+    .filter(r => r.id);
+}
+
+function parseConfigRows(rows) {
+  return Object.fromEntries(rows.filter(r => r[0]).map(([k, v]) => [k, v ?? '']));
+}
+
+function parseRaidsRows(rows) {
+  return rows
+    .map(r => ({
+      raidId:      r[0] ?? '',
+      date:        r[1] ?? '',
+      instance:    r[2] ?? '',
+      difficulty:  r[3] ?? '',
+      attendeeIds: String(r[4] ?? '').split('|').map(s => s.trim()).filter(Boolean),
+    }))
+    .filter(r => r.raidId);
+}
+
+function parseTierSnapshotRows(rows) {
+  return rows
+    .map(r => ({
+      charId:     r[0] ?? '',
+      charName:   r[1] ?? '',
+      raidId:     r[2] ?? '',
+      tierCount:  Number(r[3] ?? 0),
+      tierDetail: r[4] ?? '',
+      updatedAt:  r[5] ?? '',
+    }))
+    .filter(r => r.charId);
+}
+
+function parseWornBisRows(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const charId = r[0] ?? '';
+    const slot   = r[2] ?? '';
+    if (!charId || !slot) continue;
+    map.set(`${charId}:${slot}`, {
+      charId,
+      charName:        r[1] ?? '',
+      slot,
+      overallBISTrack: r[3] ?? '',
+      raidBISTrack:    r[4] ?? '',
+      otherTrack:      r[5] ?? '',
+      updatedAt:       r[6] ?? '',
+    });
+  }
+  return map;
+}
+
+// ── Per-team batch loader ─────────────────────────────────────────────────────
+
+// Maps cache key → { range, parse } for all tabs that can be batch-loaded.
+const TEAM_TAB_DEFS = {
+  roster:         { range: 'Roster!A2:I',          parse: parseRosterRows },
+  lootLog:        { range: 'Loot Log!A2:K',         parse: parseLootLogRows },
+  bisSubmissions: { range: 'BIS Submissions!A2:N',  parse: parseBisRows },
+  config:         { range: 'Config!A2:B',           parse: parseConfigRows },
+  raids:          { range: 'Raids!A2:E',            parse: parseRaidsRows },
+  tierSnapshot:   { range: 'Tier Snapshot!A2:F',    parse: parseTierSnapshotRows },
+  wornBis:        { range: 'Worn BIS!A2:G',         parse: parseWornBisRows },
+};
+
+/**
+ * Batch-load multiple tabs from a team sheet in a single API call, caching each
+ * result individually so subsequent calls to getRoster(), getLootLog(), etc. are
+ * pure cache hits.
+ *
+ * Tabs already in cache (or already in-flight from another concurrent request)
+ * are skipped — only truly missing tabs are fetched.
+ *
+ * @param {string}   sheetId
+ * @param {string[]} tabKeys  Keys from TEAM_TAB_DEFS. Defaults to all tabs.
+ */
+export async function primeTeamCache(sheetId, tabKeys = Object.keys(TEAM_TAB_DEFS)) {
+  // Determine which tabs need fetching (not cached and not already in-flight)
+  const missing = tabKeys.filter(k => {
+    const cacheKey = `${sheetId}|${k}`;
+    return !cacheGet(cacheKey) && !_inFlight.has(cacheKey);
+  });
+  if (!missing.length) {
+    log.verbose(`[sheets] primeTeamCache (sheet ${sheetId.slice(-6)}) — all ${tabKeys.length} tab(s) already cached`);
+    return;
+  }
+  log.verbose(`[sheets] primeTeamCache (sheet ${sheetId.slice(-6)}) — batch loading: ${missing.join(', ')}`);
+  const ranges = missing.map(k => TEAM_TAB_DEFS[k].range);
+
+  // Fire ONE batchGet for all missing ranges, register an in-flight promise for
+  // each so any concurrent requests for the same keys share the same fetch.
+  const batchPromise = readBatchRanges(sheetId, ranges);
+  for (let i = 0; i < missing.length; i++) {
+    const tabKey   = missing[i];
+    const { parse } = TEAM_TAB_DEFS[tabKey];
+    const cacheKey = `${sheetId}|${tabKey}`;
+    const idx      = i; // capture loop variable
+    _inFlight.set(cacheKey, batchPromise.then(batches => {
+      const parsed = parse(batches[idx]);
+      cacheSet(cacheKey, parsed);
+      _inFlight.delete(cacheKey);
+      return parsed;
+    }).catch(err => {
+      _inFlight.delete(cacheKey);
+      throw err;
+    }));
+  }
+
+  await batchPromise;
+}
+
 /**
  * Roster tab  (A=CharName B=Class C=Spec D=Role E=Status F=OwnerId G=OwnerNick H=CharId)
  *
@@ -283,22 +481,7 @@ function normalizeSheetDate(val) {
  */
 export async function getRoster(sheetId) {
   log.verbose(`[sheets] getRoster (sheet ${sheetId.slice(-6)})`);
-  return cachedRead(sheetId, 'roster', async () => {
-    const rows = await readRange(sheetId, 'Roster!A2:I');
-    return rows
-      .map(r => ({
-        charName:  String(r[0] ?? '').trim(),
-        class:     String(r[1] ?? '').trim(),
-        spec:      String(r[2] ?? '').trim(),
-        role:      String(r[3] ?? '').trim(),
-        status:    String(r[4] ?? '').trim(),
-        ownerId:   String(r[5] ?? '').trim(),
-        ownerNick: String(r[6] ?? '').trim(),
-        charId:    String(r[7] ?? '').trim(), // col H — empty until migration runs
-        server:    String(r[8] ?? '').trim(), // col I — optional, for same-name disambiguation
-      }))
-      .filter(c => c.charName && c.status.toLowerCase() !== 'deleted');
-  });
+  return cachedRead(sheetId, 'roster', async () => parseRosterRows(await readRange(sheetId, 'Roster!A2:I')));
 }
 
 /**
@@ -464,24 +647,7 @@ export async function deleteRosterChar(sheetId, charName, charId = null) {
  */
 export async function getLootLog(sheetId) {
   log.verbose(`[sheets] getLootLog (sheet ${sheetId.slice(-6)})`);
-  return cachedRead(sheetId, 'lootLog', async () => {
-    const rows = await readRange(sheetId, 'Loot Log!A2:K');
-    return rows
-      .map(r => ({
-        id:               r[0] ?? '',
-        raidId:           r[1] ?? '',
-        date:             normalizeSheetDate(r[2]),
-        boss:             r[3] ?? '',
-        itemName:         r[4] ?? '',
-        difficulty:       r[5] ?? '',
-        recipientId:      r[6] ?? '',
-        recipientChar:    r[7] ?? '',
-        upgradeType:      r[8] ?? '',
-        notes:            r[9] ?? '',
-        recipientCharId:  String(r[10] ?? '').trim(), // col K — empty until migration runs
-      }))
-      .filter(e => e.id);
-  });
+  return cachedRead(sheetId, 'lootLog', async () => parseLootLogRows(await readRange(sheetId, 'Loot Log!A2:K')));
 }
 
 /**
@@ -535,12 +701,7 @@ export async function getRclcResponseMap(sheetId) {
  */
 export async function getConfig(sheetId) {
   log.verbose(`[sheets] getConfig (sheet ${sheetId.slice(-6)})`);
-  return cachedRead(sheetId, 'config', async () => {
-    const rows = await readRange(sheetId, 'Config!A2:B');
-    return Object.fromEntries(
-      rows.filter(r => r[0]).map(([k, v]) => [k, v ?? ''])
-    );
-  });
+  return cachedRead(sheetId, 'config', async () => parseConfigRows(await readRange(sheetId, 'Config!A2:B')));
 }
 
 /**
@@ -582,27 +743,7 @@ export async function setConfigValue(sheetId, key, value) {
  */
 export async function getBisSubmissions(sheetId) {
   log.verbose(`[sheets] getBisSubmissions (sheet ${sheetId.slice(-6)})`);
-  return cachedRead(sheetId, 'bisSubmissions', async () => {
-    const rows = await readRange(sheetId, 'BIS Submissions!A2:N');
-    return rows
-      .map(r => ({
-        id:             String(r[0]  ?? '').trim(),
-        charName:       String(r[1]  ?? '').trim(),
-        spec:           String(r[2]  ?? '').trim(),
-        slot:           String(r[3]  ?? '').trim(),
-        trueBis:        String(r[4]  ?? '').trim(),
-        raidBis:        String(r[5]  ?? '').trim(),
-        rationale:      String(r[6]  ?? '').trim(),
-        status:         String(r[7]  ?? 'Pending').trim(),
-        submittedAt:    String(r[8]  ?? '').trim(),
-        reviewedBy:     String(r[9]  ?? '').trim(),
-        officerNote:    String(r[10] ?? '').trim(),
-        trueBisItemId:  String(r[11] ?? '').trim(),
-        raidBisItemId:  String(r[12] ?? '').trim(),
-        charId:         String(r[13] ?? '').trim(), // col N — empty until migration runs
-      }))
-      .filter(r => r.id);
-  });
+  return cachedRead(sheetId, 'bisSubmissions', async () => parseBisRows(await readRange(sheetId, 'BIS Submissions!A2:N')));
 }
 
 /**
@@ -1346,18 +1487,7 @@ export function applyRaidBisInference(rows, itemDb) {
  */
 export async function getRaids(sheetId) {
   log.verbose(`[sheets] getRaids (sheet ${sheetId.slice(-6)})`);
-  return cachedRead(sheetId, 'raids', async () => {
-    const rows = await readRange(sheetId, 'Raids!A2:E');
-    return rows
-      .map(r => ({
-        raidId:      r[0] ?? '',
-        date:        r[1] ?? '',
-        instance:    r[2] ?? '',
-        difficulty:  r[3] ?? '',
-        attendeeIds: String(r[4] ?? '').split('|').map(s => s.trim()).filter(Boolean),
-      }))
-      .filter(r => r.raidId);
-  });
+  return cachedRead(sheetId, 'raids', async () => parseRaidsRows(await readRange(sheetId, 'Raids!A2:E')));
 }
 
 /**
@@ -1476,17 +1606,7 @@ export async function upsertRaidEncounters(sheetId, rows) {
  */
 export async function getTierSnapshot(sheetId) {
   log.verbose(`[sheets] getTierSnapshot (sheet ${sheetId.slice(-6)})`);
-  const rows = await readRange(sheetId, 'Tier Snapshot!A2:F');
-  return rows
-    .map(r => ({
-      charId:     r[0] ?? '',
-      charName:   r[1] ?? '',
-      raidId:     r[2] ?? '',
-      tierCount:  Number(r[3] ?? 0),
-      tierDetail: r[4] ?? '',
-      updatedAt:  r[5] ?? '',
-    }))
-    .filter(r => r.charId);
+  return cachedRead(sheetId, 'tierSnapshot', async () => parseTierSnapshotRows(await readRange(sheetId, 'Tier Snapshot!A2:F')));
 }
 
 /**
@@ -1515,6 +1635,97 @@ export async function upsertTierSnapshot(sheetId, snapshots) {
 
   if (updates.length) await batchWriteRanges(sheetId, updates);
   if (appends.length) await appendRows(sheetId, 'Tier Snapshot!A:F', appends);
+  cacheInvalidate(sheetId, 'tierSnapshot');
+}
+
+// ── Worn BIS ──────────────────────────────────────────────────────────────────
+
+/**
+ * Worn BIS tab  (A=CharId B=CharName C=Slot D=OverallBISTrack E=RaidBISTrack F=OtherTrack G=UpdatedAt)
+ * One row per character × slot. Tracks the highest upgrade track ever worn for each
+ * BIS category per slot. "Best ever" — values only increase, never decrease.
+ *
+ * Track values: 'Veteran' | 'Champion' | 'Hero' | 'Mythic' | '' (never worn at a known track)
+ *
+ * @param {string} sheetId
+ * @returns {Map<string, object>}  Map keyed by `${charId}:${slot}`
+ */
+export async function getWornBis(sheetId) {
+  log.verbose(`[sheets] getWornBis (sheet ${sheetId.slice(-6)})`);
+  return cachedRead(sheetId, 'wornBis', async () => parseWornBisRows(await readRange(sheetId, 'Worn BIS!A2:G')));
+}
+
+/**
+ * Upsert Worn BIS rows. Keyed by CharId + Slot (composite) — one row per character per slot.
+ *
+ * @param {string}   sheetId
+ * @param {object[]} rows  Array of { charId, charName, slot, overallBISTrack, raidBISTrack, otherTrack }
+ */
+export async function upsertWornBis(sheetId, rows) {
+  if (!rows.length) return;
+  log.verbose(`[sheets] upsertWornBis (sheet ${sheetId.slice(-6)}) — ${rows.length} row(s)`);
+  const existing = await readRange(sheetId, 'Worn BIS!A2:C');
+  const updates  = [];
+  const appends  = [];
+  const now      = new Date().toISOString();
+
+  for (const row of rows) {
+    const rowIdx = existing.findIndex(r => r[0] === row.charId && r[2] === row.slot);
+    const cells  = [row.charId, row.charName, row.slot, row.overallBISTrack, row.raidBISTrack, row.otherTrack, now];
+    if (rowIdx >= 0) {
+      updates.push({ range: `Worn BIS!A${rowIdx + 2}:G${rowIdx + 2}`, values: [cells] });
+    } else {
+      appends.push(cells);
+      existing.push([row.charId, row.charName, row.slot]); // prevent duplicate appends within same batch
+    }
+  }
+
+  if (updates.length) await batchWriteRanges(sheetId, updates);
+  if (appends.length) await appendRows(sheetId, 'Worn BIS!A:G', appends);
+  cacheInvalidate(sheetId, 'wornBis');
+}
+
+/**
+ * Blank overallBISTrack and raidBISTrack for specific charId+slot pairs.
+ * Used when the BIS definition for a slot changes (approval or default edit),
+ * so the recorded "best-ever" tracks are cleared until the next WCL resync.
+ * otherTrack is intentionally preserved.
+ *
+ * @param {string}   sheetId
+ * @param {object[]} targets  Array of { charId, slot }
+ */
+export async function invalidateWornBisSlots(sheetId, targets) {
+  if (!targets.length) return;
+  log.verbose(`[sheets] invalidateWornBisSlots (sheet ${sheetId.slice(-6)}) — ${targets.length} target(s)`);
+  const targetSet = new Set(targets.map(t => `${t.charId}:${t.slot}`));
+  const existing  = await readRange(sheetId, 'Worn BIS!A2:G');
+  const updates   = [];
+  for (let i = 0; i < existing.length; i++) {
+    const r      = existing[i];
+    const charId = r[0] ?? '';
+    const slot   = r[2] ?? '';
+    if (!targetSet.has(`${charId}:${slot}`)) continue;
+    // Blank D (OverallBISTrack) and E (RaidBISTrack) only; preserve otherTrack
+    updates.push({ range: `Worn BIS!D${i + 2}:E${i + 2}`, values: [['', '']] });
+  }
+  if (updates.length) await batchWriteRanges(sheetId, updates);
+  cacheInvalidate(sheetId, 'wornBis');
+}
+
+/**
+ * Clear all data rows from the Worn BIS tab (keeps header row).
+ * Used for season reset via the Admin page.
+ *
+ * @param {string} sheetId
+ */
+export async function clearWornBis(sheetId) {
+  log.verbose(`[sheets] clearWornBis (sheet ${sheetId.slice(-6)})`);
+  // Read how many rows exist so we can overwrite them with blanks
+  const existing = await readRange(sheetId, 'Worn BIS!A2:A');
+  if (!existing.length) return;
+  const blankRows = existing.map(() => ['', '', '', '', '', '', '']);
+  await writeRange(sheetId, 'Worn BIS!A2:G', blankRows);
+  cacheInvalidate(sheetId, 'wornBis');
 }
 
 // ── Tier Items (master) ───────────────────────────────────────────────────────
