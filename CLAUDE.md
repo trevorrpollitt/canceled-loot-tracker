@@ -188,9 +188,10 @@ Column order is the source of truth. Tabs marked **[master]** live in the master
 - Characters not on the roster (pugs) are skipped
 - Used by council view to show tier piece status per candidate
 
-### Worn BIS (A=CharId B=CharName C=Spec D=Slot E=OverallBISTrack F=RaidBISTrack G=OtherTrack H=UpdatedAt)
+### Worn BIS (A=CharId B=CharName C=Slot D=OverallBISTrack E=RaidBISTrack F=OtherTrack G=UpdatedAt H=Spec)
 - One row per character × spec × slot (~16 slots × number of specs per character)
-- Upsert key: CharId (col A) + Spec (col C) + Slot (col D) composite
+- Upsert key: CharId (col A) + Slot (col C) + Spec (col H) composite
+- Spec column (H) added after initial rollout — rows written before multi-spec support have empty H and are effectively orphaned (never matched by spec-aware lookups)
 - Spec is determined from WCL CombatantInfo `specID` (WoW spec ID → app spec name via `WOW_SPEC_ID_TO_NAME`); falls back to roster primary spec if specID is absent or unrecognised
 - Records the **highest upgrade track** ever worn in each BIS category for that slot × spec
 - OverallBISTrack: highest track worn for an item matching the character's approved Overall BIS for that spec

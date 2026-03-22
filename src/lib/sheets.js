@@ -397,18 +397,18 @@ function parseWornBisRows(rows) {
   const map = new Map();
   for (const r of rows) {
     const charId = r[0] ?? '';
-    const spec   = r[2] ?? '';
-    const slot   = r[3] ?? '';
+    const slot   = r[2] ?? '';
+    const spec   = r[7] ?? ''; // col H — added after initial rollout; empty on pre-spec rows
     if (!charId || !slot) continue;
     map.set(`${charId}:${spec}:${slot}`, {
       charId,
       charName:        r[1] ?? '',
-      spec,
       slot,
-      overallBISTrack: r[4] ?? '',
-      raidBISTrack:    r[5] ?? '',
-      otherTrack:      r[6] ?? '',
-      updatedAt:       r[7] ?? '',
+      spec,
+      overallBISTrack: r[3] ?? '',
+      raidBISTrack:    r[4] ?? '',
+      otherTrack:      r[5] ?? '',
+      updatedAt:       r[6] ?? '',
     });
   }
   return map;
@@ -1742,7 +1742,7 @@ export async function upsertTierSnapshot(sheetId, snapshots) {
 // ── Worn BIS ──────────────────────────────────────────────────────────────────
 
 /**
- * Worn BIS tab  (A=CharId B=CharName C=Spec D=Slot E=OverallBISTrack F=RaidBISTrack G=OtherTrack H=UpdatedAt)
+ * Worn BIS tab  (A=CharId B=CharName C=Slot D=OverallBISTrack E=RaidBISTrack F=OtherTrack G=UpdatedAt H=Spec)
  * One row per character × slot. Tracks the highest upgrade track ever worn for each
  * BIS category per slot. "Best ever" — values only increase, never decrease.
  *
@@ -1765,19 +1765,20 @@ export async function getWornBis(sheetId) {
 export async function upsertWornBis(sheetId, rows) {
   if (!rows.length) return;
   log.verbose(`[sheets] upsertWornBis (sheet ${sheetId.slice(-6)}) — ${rows.length} row(s)`);
-  const existing = await readRange(sheetId, 'Worn BIS!A2:D');
+  const existing = await readRange(sheetId, 'Worn BIS!A2:H');
   const updates  = [];
   const appends  = [];
   const now      = new Date().toISOString();
 
   for (const row of rows) {
-    const rowIdx = existing.findIndex(r => r[0] === row.charId && r[2] === row.spec && r[3] === row.slot);
-    const cells  = [row.charId, row.charName, row.spec, row.slot, row.overallBISTrack, row.raidBISTrack, row.otherTrack, now];
+    // Match on charId (col A) + slot (col C) + spec (col H)
+    const rowIdx = existing.findIndex(r => r[0] === row.charId && r[2] === row.slot && (r[7] ?? '') === row.spec);
+    const cells  = [row.charId, row.charName, row.slot, row.overallBISTrack, row.raidBISTrack, row.otherTrack, now, row.spec];
     if (rowIdx >= 0) {
       updates.push({ range: `Worn BIS!A${rowIdx + 2}:H${rowIdx + 2}`, values: [cells] });
     } else {
       appends.push(cells);
-      existing.push([row.charId, row.charName, row.spec, row.slot]); // prevent duplicate appends within same batch
+      existing.push([row.charId, row.charName, row.slot, '', '', '', '', row.spec]); // prevent duplicate appends within same batch
     }
   }
 
@@ -1804,10 +1805,10 @@ export async function invalidateWornBisSlots(sheetId, targets) {
   for (let i = 0; i < existing.length; i++) {
     const r      = existing[i];
     const charId = r[0] ?? '';
-    const slot   = r[3] ?? '';
+    const slot   = r[2] ?? '';
     if (!targetSet.has(`${charId}:${slot}`)) continue;
-    // Blank E (OverallBISTrack) and F (RaidBISTrack) only; preserve otherTrack
-    updates.push({ range: `Worn BIS!E${i + 2}:F${i + 2}`, values: [['', '']] });
+    // Blank D (OverallBISTrack) and E (RaidBISTrack) only; preserve otherTrack
+    updates.push({ range: `Worn BIS!D${i + 2}:E${i + 2}`, values: [['', '']] });
   }
   if (updates.length) await batchWriteRanges(sheetId, updates);
   cacheInvalidate(sheetId, 'wornBis');
@@ -1824,7 +1825,7 @@ export async function clearWornBis(sheetId) {
   // Read how many rows exist so we can overwrite them with blanks
   const existing = await readRange(sheetId, 'Worn BIS!A2:A');
   if (!existing.length) return;
-  const blankRows = existing.map(() => ['', '', '', '', '', '', '', '']);
+  const blankRows = existing.map(() => ['', '', '', '', '', '', '', '']); // A:H
   await writeRange(sheetId, 'Worn BIS!A2:H', blankRows);
   cacheInvalidate(sheetId, 'wornBis');
 }
