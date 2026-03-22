@@ -661,20 +661,40 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
   log.verbose(`[wcl-sync] Report ${report.code}: ${snapshotRows.length} tier snapshot row(s)`);
 
   // ── Worn BIS ─────────────────────────────────────────────────────────────────
+  // Fetch CombatantInfo from the last pull of each boss encounter rather than
+  // just the single last fight. This ensures:
+  //   • Characters benched for the final boss still get their gear recorded
+  //   • Characters who switched specs between bosses get per-spec Worn BIS updated
+  // Falls back to fightForSnapshot if no completed boss fights exist yet.
+  const completedBossFights = fights.filter(
+    f => f.encounterID !== 0 && validEncounterIds.has(f.encounterID) && !f.inProgress,
+  );
+  const lastPullByBoss = new Map(); // encounterID → last completed fight
+  for (const f of completedBossFights) {
+    if (!lastPullByBoss.has(f.encounterID) || f.id > lastPullByBoss.get(f.encounterID).id) {
+      lastPullByBoss.set(f.encounterID, f);
+    }
+  }
+  const bossLastPulls = lastPullByBoss.size > 0 ? [...lastPullByBoss.values()] : [fightForSnapshot];
 
-  // Build spec-per-charId from combatant events so tier supplement uses the same spec
+  const perBossEvents = await Promise.all(
+    bossLastPulls.map(f => getCombatantInfo(report.code, f.id, clientId, clientSecret)),
+  );
+  const wornBisCombatantEvents = perBossEvents.flat();
+  log.verbose(`[wcl-sync] Report ${report.code}: ${wornBisCombatantEvents.length} combatant event(s) across ${bossLastPulls.length} boss fight(s) for Worn BIS`);
+
+  // Build spec-per-charId from all boss combatant events (last event per character wins)
   const specByCharId = new Map();
-  for (const event of combatantEvents) {
+  for (const event of wornBisCombatantEvents) {
     const actor = actors.find(a => a.id === event.sourceID);
     if (!actor) continue;
     const char = resolveActor(actor, rosterLookup);
     if (!char || !char.charId) continue;
-    if (specByCharId.has(char.charId)) continue; // first event wins
     const specFromEvent = event.specID ? WOW_SPEC_ID_TO_NAME[event.specID] : undefined;
-    specByCharId.set(char.charId, specFromEvent ?? char.spec);
+    specByCharId.set(char.charId, specFromEvent ?? char.spec); // overwrite = last boss wins
   }
 
-  const wornBisRows = extractWornBis(combatantEvents, actors, rosterLookup, bisLookup ?? new Map(), itemDbMap ?? new Map(), trackRanges, craftedBonusIds ?? new Set());
+  const wornBisRows = extractWornBis(wornBisCombatantEvents, actors, rosterLookup, bisLookup ?? new Map(), itemDbMap ?? new Map(), trackRanges, craftedBonusIds ?? new Set());
 
   // For slots where BIS is <Tier>, extractWornBis can't match (it doesn't have
   // tierItemsByClass). Pull the track from snapshotRows instead.
@@ -719,7 +739,7 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
 
   // ── Raids row ────────────────────────────────────────────────────────────────
   const attendeeIds = [...new Set(
-    combatantEvents
+    wornBisCombatantEvents
       .map(event => {
         const actor = actors.find(a => a.id === event.sourceID);
         if (!actor) return null;
