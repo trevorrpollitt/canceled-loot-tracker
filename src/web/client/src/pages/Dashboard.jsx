@@ -147,7 +147,9 @@ function BisTable({ bis, specDefaults, loot, wornBis = {} }) {
     const overallId      = src.trueBisItemId  ?? '';
     const raid           = src.raidBis        ?? '';
     const raidId         = src.raidBisItemId  ?? '';
-    const isPersonal     = !!personal;
+    // Show "Personal" badge only in the column where the personal value differs from default.
+    const isPersonalOverall = !!personal && overall !== (def?.trueBis ?? '');
+    const isPersonalRaid    = !!personal && raid    !== (def?.raidBis ?? '');
 
     // A slot is "received" when the player has a BIS-tagged loot entry matching
     // the item name. Sentinel values (<Tier> etc.) can't be matched by name.
@@ -162,7 +164,7 @@ function BisTable({ bis, specDefaults, loot, wornBis = {} }) {
     const displayWorn = { ...worn, raidBISTrack: effectiveRaidTrack };
     const maxed    = worn.overallBISTrack === 'Mythic';
     const slotBest = bestTrack(worn.overallBISTrack, worn.raidBISTrack, worn.otherTrack);
-    return [{ slot, overall, overallId, raid, raidId, isPersonal, received, worn: displayWorn, maxed, slotBest }];
+    return [{ slot, overall, overallId, raid, raidId, isPersonalOverall, isPersonalRaid, received, worn: displayWorn, maxed, slotBest }];
   });
 
   if (!rows.length) return <p className="empty">No BIS data available for this spec.</p>;
@@ -186,7 +188,7 @@ function BisTable({ bis, specDefaults, loot, wornBis = {} }) {
               <tr className="bis-group-header-row">
                 <td colSpan={4} className="bis-group-header">{group.label}</td>
               </tr>
-              {groupRows.map(({ slot, overall, overallId, raid, raidId, isPersonal, received, worn, maxed, slotBest }) => (
+              {groupRows.map(({ slot, overall, overallId, raid, raidId, isPersonalOverall, isPersonalRaid, received, worn, maxed, slotBest }) => (
                 <tr key={slot} className={maxed ? 'bis-row-received' : ''}>
                   <td className="bis-slot">{slot}</td>
                   <td>
@@ -195,7 +197,7 @@ function BisTable({ bis, specDefaults, loot, wornBis = {} }) {
                       itemId={overallId}
                       className={SENTINELS.has(overall) ? 'bis-sentinel' : undefined}
                     />
-                    {isPersonal && <span className="badge badge-personal">Personal</span>}
+                    {isPersonalOverall && <span className="badge badge-personal">Personal</span>}
                     <TrackBadge track={worn.overallBISTrack} />
                   </td>
                   <td>
@@ -204,6 +206,7 @@ function BisTable({ bis, specDefaults, loot, wornBis = {} }) {
                       itemId={raidId}
                       className={SENTINELS.has(raid) ? 'bis-sentinel' : 'text-muted'}
                     />
+                    {isPersonalRaid && <span className="badge badge-personal">Personal</span>}
                     <TrackBadge track={worn.raidBISTrack} />
                   </td>
                   <td className="bis-col-best"><TrackBadge track={slotBest} /></td>
