@@ -75,7 +75,7 @@ import {
   getCombatantInfo,
 } from './wcl.js';
 import { matchesBis } from './bis-match.js';
-import { getArmorType, toCanonical } from './specs.js';
+import { getArmorType, toCanonical, getCharSpecs, WOW_SPEC_ID_TO_NAME } from './specs.js';
 
 // Upgrade tracks in order — each spans 8 consecutive bonus IDs from veteran_start
 const TRACK_NAMES = ['Veteran', 'Champion', 'Hero', 'Mythic'];
@@ -152,8 +152,17 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
     const char = resolveActor(actor, rosterLookup);
     if (!char) continue; // pug — skip
 
-    const armorType  = getArmorType(actor.subType); // actor.subType is the WoW class name
-    const charBisMap = bisLookup.get(char.charId) ?? bisLookup.get(`name:${char.charName.toLowerCase()}`);
+    const armorType = getArmorType(actor.subType); // actor.subType is the WoW class name
+
+    // Resolve the spec the character was actually playing in this report.
+    // event.specID is the WoW spec ID from CombatantInfo. Fall back to roster primary spec
+    // if specID is missing or unrecognised (e.g. older logs, unknown specs).
+    const specFromEvent = event.specID ? WOW_SPEC_ID_TO_NAME[event.specID] : undefined;
+    const charSpec      = specFromEvent ?? char.spec;
+
+    // bisLookup is keyed as charId:spec (all specs) or "name:<charName>" fallback for primary
+    const bisKey     = char.charId ? `${char.charId}:${charSpec}` : `name:${char.charName.toLowerCase()}`;
+    const charBisMap = bisLookup.get(bisKey) ?? bisLookup.get(`name:${char.charName.toLowerCase()}`);
 
     for (const [slotIdx, slotName] of Object.entries(WCL_SLOT_MAP)) {
       const gearItem = (event.gear ?? [])[Number(slotIdx)];
@@ -205,8 +214,8 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
         matchedAnyBis = true;
 
         const recordTrack = isCrafted ? 'Crafted' : rawTrack;
-        const key  = `${char.charId}:${bisSlot}`;
-        const prev = result.get(key) ?? { charId: char.charId, charName: char.charName, slot: bisSlot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+        const key  = `${char.charId}:${charSpec}:${bisSlot}`;
+        const prev = result.get(key) ?? { charId: char.charId, charName: char.charName, spec: charSpec, slot: bisSlot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
         result.set(key, {
           ...prev,
           overallBISTrack: matchesOverall ? mergeTrack(prev.overallBISTrack, recordTrack) : prev.overallBISTrack,
@@ -218,8 +227,8 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
       // Crafted items (Unknown track) get 'Crafted' so the row still exists — name-based
       // BIS matching is impossible without the item name, which WCL gear data omits.
       if (!matchedAnyBis) {
-        const key      = `${char.charId}:${slotName}`;
-        const prev     = result.get(key) ?? { charId: char.charId, charName: char.charName, slot: slotName, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+        const key      = `${char.charId}:${charSpec}:${slotName}`;
+        const prev     = result.get(key) ?? { charId: char.charId, charName: char.charName, spec: charSpec, slot: slotName, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
         const otherVal = isCrafted ? 'Crafted' : rawTrack;
         result.set(key, { ...prev, otherTrack: mergeTrack(prev.otherTrack, otherVal) });
       }
@@ -461,19 +470,31 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
     defaultBisBySpec.get(row.spec).push(row);
   }
 
+  // Build BIS lookup per character per spec: keyed as "charId:spec" covering all specs.
+  // Falls back to "name:<charName>" for the primary spec of un-migrated (no charId) rows.
   const bisLookup = new Map();
   for (const char of roster) {
-    const slots = new Map();
-    // Seed from spec defaults
-    for (const row of defaultBisBySpec.get(toCanonical(char.spec)) ?? []) {
-      slots.set(row.slot, { trueBis: row.trueBis, trueBisItemId: row.trueBisItemId, raidBis: row.raidBis, raidBisItemId: row.raidBisItemId });
+    const charSpecs = getCharSpecs(char); // { primary, secondary[], all[] }
+    const charSubs  = allSubs.filter(s =>
+      s.status === 'Approved' &&
+      (char.charId && s.charId ? s.charId === char.charId : s.charName.toLowerCase() === char.charName.toLowerCase())
+    );
+
+    for (const spec of charSpecs.all) {
+      const slots = new Map();
+      // Seed from spec defaults for this spec
+      for (const row of defaultBisBySpec.get(toCanonical(spec)) ?? []) {
+        slots.set(row.slot, { trueBis: row.trueBis, trueBisItemId: row.trueBisItemId, raidBis: row.raidBis, raidBisItemId: row.raidBisItemId });
+      }
+      // Override with personal approved submissions for this spec
+      const specSubs = charSubs.filter(s => s.spec ? s.spec === spec : spec === charSpecs.primary);
+      for (const sub of specSubs) {
+        slots.set(sub.slot, { trueBis: sub.trueBis, trueBisItemId: sub.trueBisItemId, raidBis: sub.raidBis, raidBisItemId: sub.raidBisItemId });
+      }
+      if (char.charId) bisLookup.set(`${char.charId}:${spec}`, slots);
     }
-    // Override with personal approved submissions (charId match preferred, charName fallback)
-    for (const sub of allSubs.filter(s => s.status === 'Approved' && (s.charId ? s.charId === char.charId : s.charName.toLowerCase() === char.charName.toLowerCase()))) {
-      slots.set(sub.slot, { trueBis: sub.trueBis, trueBisItemId: sub.trueBisItemId, raidBis: sub.raidBis, raidBisItemId: sub.raidBisItemId });
-    }
-    const key = char.charId || `name:${char.charName.toLowerCase()}`;
-    bisLookup.set(key, slots);
+    // Fallback key for primary spec on un-migrated characters (no charId)
+    if (!char.charId) bisLookup.set(`name:${char.charName.toLowerCase()}`, bisLookup.get(`${char.charId}:${charSpecs.primary}`) ?? new Map());
   }
 
   const existingWornBis = await getWornBis(team.sheetId); // Map<charId:slot, row>
@@ -640,13 +661,27 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
   log.verbose(`[wcl-sync] Report ${report.code}: ${snapshotRows.length} tier snapshot row(s)`);
 
   // ── Worn BIS ─────────────────────────────────────────────────────────────────
+
+  // Build spec-per-charId from combatant events so tier supplement uses the same spec
+  const specByCharId = new Map();
+  for (const event of combatantEvents) {
+    const actor = actors.find(a => a.id === event.sourceID);
+    if (!actor) continue;
+    const char = resolveActor(actor, rosterLookup);
+    if (!char || !char.charId) continue;
+    if (specByCharId.has(char.charId)) continue; // first event wins
+    const specFromEvent = event.specID ? WOW_SPEC_ID_TO_NAME[event.specID] : undefined;
+    specByCharId.set(char.charId, specFromEvent ?? char.spec);
+  }
+
   const wornBisRows = extractWornBis(combatantEvents, actors, rosterLookup, bisLookup ?? new Map(), itemDbMap ?? new Map(), trackRanges, craftedBonusIds ?? new Set());
 
   // For slots where BIS is <Tier>, extractWornBis can't match (it doesn't have
   // tierItemsByClass). Pull the track from snapshotRows instead.
   for (const snap of snapshotRows) {
     if (!snap.tierDetail) continue;
-    const charBisMap = (bisLookup ?? new Map()).get(snap.charId)
+    const charSpec   = specByCharId.get(snap.charId) ?? snap.spec ?? '';
+    const charBisMap = (bisLookup ?? new Map()).get(`${snap.charId}:${charSpec}`)
                     ?? (bisLookup ?? new Map()).get(`name:${snap.charName.toLowerCase()}`);
     if (!charBisMap) continue;
     for (const piece of snap.tierDetail.split('|').filter(Boolean)) {
@@ -660,8 +695,8 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
       const matchesOverall = charBis.trueBis === '<Tier>';
       const matchesRaid    = charBis.raidBis  === '<Tier>';
       if (!matchesOverall && !matchesRaid) continue;
-      const key  = `${snap.charId}:${slot}`;
-      const prev = wornBisRows.get(key) ?? { charId: snap.charId, charName: snap.charName, slot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+      const key  = `${snap.charId}:${charSpec}:${slot}`;
+      const prev = wornBisRows.get(key) ?? { charId: snap.charId, charName: snap.charName, spec: charSpec, slot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
       wornBisRows.set(key, {
         ...prev,
         overallBISTrack: matchesOverall ? mergeTrack(prev.overallBISTrack, track) : prev.overallBISTrack,

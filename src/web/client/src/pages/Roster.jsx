@@ -568,7 +568,7 @@ function CharacterDetail({ charName, onClose }) {
                 ))}
               </div>
             )}
-            <BisTable bis={bisForSpec} specDefaults={defaultsForSpec} loot={data.loot} wornBis={data.wornBis ?? {}} />
+            <BisTable bis={bisForSpec} specDefaults={defaultsForSpec} loot={data.loot} wornBis={(data.wornBisBySpec ?? {})[activeSpec] ?? {}} />
           </section>
 
           <section className="card">

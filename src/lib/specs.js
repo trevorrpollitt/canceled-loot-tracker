@@ -110,6 +110,41 @@ export function getCharSpecs(rosterEntry) {
   return { primary, secondary, pending, all: [primary, ...secondary].filter(Boolean) };
 }
 
+/**
+ * Map from WoW spec ID (as returned in WCL CombatantInfo event.specID) to the
+ * sheet display name used throughout this app. Used by wcl-sync to record Worn
+ * BIS data under the correct spec when a character plays a non-primary spec.
+ * Update each expansion/patch if Blizzard adds or renumbers specs.
+ */
+export const WOW_SPEC_ID_TO_NAME = {
+  // Death Knight
+  250: 'Blood DK',    251: 'Frost DK',    252: 'Unholy DK',
+  // Demon Hunter
+  577: 'Havoc DH',   581: 'Vengeance DH',
+  // Druid
+  102: 'Balance Druid', 103: 'Feral Druid', 104: 'Guardian Druid', 105: 'Resto Druid',
+  // Evoker
+  1467: 'Devastation Evoker', 1468: 'Preservation Evoker', 1473: 'Augmentation Evoker',
+  // Hunter
+  253: 'BM Hunter',  254: 'MM Hunter',   255: 'SV Hunter',
+  // Mage
+  62: 'Arcane Mage', 63: 'Fire Mage',    64: 'Frost Mage',
+  // Monk
+  268: 'Brewmaster Monk', 270: 'Mistweaver Monk', 269: 'Windwalker Monk',
+  // Paladin
+  65: 'Holy Paladin', 66: 'Prot Paladin', 70: 'Ret Paladin',
+  // Priest
+  256: 'Disc Priest', 257: 'Holy Priest', 258: 'Shadow Priest',
+  // Rogue
+  259: 'Assassination Rogue', 260: 'Outlaw Rogue', 261: 'Subtlety Rogue',
+  // Shaman
+  262: 'Ele Shaman', 263: 'Enh Shaman',  264: 'Resto Shaman',
+  // Warlock
+  265: 'Affliction Lock', 266: 'Demo Lock', 267: 'Destro Lock',
+  // Warrior
+  71: 'Arms Warrior', 72: 'Fury Warrior', 73: 'Prot Warrior',
+};
+
 /** All sheet spec names, grouped by class. */
 export const CLASS_SPECS = {
   'Death Knight':  ['Blood DK', 'Frost DK', 'Unholy DK'],

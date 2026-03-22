@@ -81,13 +81,12 @@ router.get('/', requireAuth, async (c) => {
       ).length,
     }]));
 
-    // Build slot→tracks map for the current character from the Worn BIS sheet
+    // Build slot→tracks map for the current character + active spec from the Worn BIS sheet
     const wornBis = {};
-    for (const [key, row] of wornBisMap) {
-      const [rowCharId, ...slotParts] = key.split(':');
-      if (rowCharId !== charId) continue;
-      const slot = slotParts.join(':');
-      wornBis[slot] = {
+    for (const row of wornBisMap.values()) {
+      if (row.charId !== charId) continue;
+      if (row.spec.toLowerCase() !== activeSpec.toLowerCase()) continue;
+      wornBis[row.slot] = {
         overallBISTrack: row.overallBISTrack ?? '',
         raidBISTrack:    row.raidBISTrack    ?? '',
         otherTrack:      row.otherTrack      ?? '',

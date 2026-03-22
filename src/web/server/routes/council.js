@@ -39,11 +39,11 @@ function mergeTrack(a, b) {
   return (TRACK_ORDER[a] ?? -1) >= (TRACK_ORDER[b] ?? -1) ? a : b;
 }
 
-function getWornTracksForSlot(wornBisMap, charId, itemSlot) {
+function getWornTracksForSlot(wornBisMap, charId, spec, itemSlot) {
   const slots = SLOT_EXPANSIONS[itemSlot] ?? [itemSlot];
   const best  = { overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
   for (const slot of slots) {
-    const w = wornBisMap.get(`${charId}:${slot}`);
+    const w = wornBisMap.get(`${charId}:${spec}:${slot}`);
     if (!w) continue;
     best.overallBISTrack = mergeTrack(best.overallBISTrack, w.overallBISTrack);
     best.raidBISTrack    = mergeTrack(best.raidBISTrack,    w.raidBISTrack);
@@ -228,7 +228,7 @@ router.get('/candidates', async (c) => {
           const { overallBisMatch: ovm, raidBisMatch: rbm, hasRaidBis: hrb } =
             computeSpecBisMatch(charKey, spec, item, itemSlot, approvedBis, defaultBisMap);
           return { spec, overallBisMatch: ovm, raidBisMatch: rbm, hasRaidBis: hrb,
-            wornBis: getWornTracksForSlot(wornBisMap, char.charId, itemSlot) };
+            wornBis: getWornTracksForSlot(wornBisMap, char.charId, sc.spec, itemSlot) };
         });
 
       candidates.push({
@@ -237,7 +237,7 @@ router.get('/candidates', async (c) => {
         acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
         raidsAttended: raidsByOwner[char.ownerId] ?? 0,
         overallBisMatch, raidBisMatch, hasRaidBis,
-        wornBis: getWornTracksForSlot(wornBisMap, char.charId, itemSlot),
+        wornBis: getWornTracksForSlot(wornBisMap, char.charId, char.spec, itemSlot),
         secondarySpecCandidates,
         ...(item.isTierToken && { tierSlots: tierSnapshotMap.get(char.charId) ?? {} }),
       });

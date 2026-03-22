@@ -198,13 +198,12 @@ router.get('/:charName', async (c) => {
     const approvedBis  = bisBySpec[charSpecs.primary] ?? [];
     const specDefaults = defaultsBySpec[charSpecs.primary] ?? [];
 
-    // Build slot → tracks map for this character from the Worn BIS sheet
-    const wornBis = {};
-    for (const [key, row] of wornBisMap) {
-      const [rowCharId, ...slotParts] = key.split(':');
-      if (rowCharId !== rosterChar.charId) continue;
-      const slot = slotParts.join(':');
-      wornBis[slot] = {
+    // Build wornBisBySpec: { [spec]: { [slot]: { overallBISTrack, raidBISTrack, otherTrack } } }
+    const wornBisBySpec = {};
+    for (const row of wornBisMap.values()) {
+      if (row.charId !== rosterChar.charId) continue;
+      if (!wornBisBySpec[row.spec]) wornBisBySpec[row.spec] = {};
+      wornBisBySpec[row.spec][row.slot] = {
         overallBISTrack: row.overallBISTrack ?? '',
         raidBISTrack:    row.raidBISTrack    ?? '',
         otherTrack:      row.otherTrack      ?? '',
@@ -219,7 +218,7 @@ router.get('/:charName', async (c) => {
       pendingPrimarySpec: charSpecs.pending,
       bis: approvedBis, specDefaults,
       bisBySpec, defaultsBySpec,
-      loot, accountChars: accountCharNames, accountLoot, wornBis,
+      loot, accountChars: accountCharNames, accountLoot, wornBisBySpec,
     });
   } catch (err) {
     console.error('[ROSTER] Character detail error:', err);

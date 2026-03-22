@@ -188,13 +188,14 @@ Column order is the source of truth. Tabs marked **[master]** live in the master
 - Characters not on the roster (pugs) are skipped
 - Used by council view to show tier piece status per candidate
 
-### Worn BIS (A=CharId B=CharName C=Slot D=OverallBISTrack E=RaidBISTrack F=OtherTrack G=UpdatedAt)
-- One row per character × slot (~16 slots per character)
-- Upsert key: CharId (col A) + Slot (col C) composite
-- Records the **highest upgrade track** ever worn in each BIS category for that slot
-- OverallBISTrack: highest track worn for an item matching the character's approved Overall BIS
-- RaidBISTrack: highest track worn for an item matching the character's approved Raid BIS
-- OtherTrack: highest track worn for any item in this slot that isn't their Overall or Raid BIS
+### Worn BIS (A=CharId B=CharName C=Spec D=Slot E=OverallBISTrack F=RaidBISTrack G=OtherTrack H=UpdatedAt)
+- One row per character × spec × slot (~16 slots × number of specs per character)
+- Upsert key: CharId (col A) + Spec (col C) + Slot (col D) composite
+- Spec is determined from WCL CombatantInfo `specID` (WoW spec ID → app spec name via `WOW_SPEC_ID_TO_NAME`); falls back to roster primary spec if specID is absent or unrecognised
+- Records the **highest upgrade track** ever worn in each BIS category for that slot × spec
+- OverallBISTrack: highest track worn for an item matching the character's approved Overall BIS for that spec
+- RaidBISTrack: highest track worn for an item matching the character's approved Raid BIS for that spec
+- OtherTrack: highest track worn for any item in this slot that isn't their Overall or Raid BIS (spec-agnostic)
 - Track values: `Veteran | Champion | Hero | Mythic` or empty string (never worn at a known track)
 - Tracks never decrease — values are merged with existing sheet data on each sync run (best-ever)
 - Items with unrecognised bonus IDs (Unknown track) are skipped entirely

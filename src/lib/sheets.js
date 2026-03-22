@@ -397,16 +397,18 @@ function parseWornBisRows(rows) {
   const map = new Map();
   for (const r of rows) {
     const charId = r[0] ?? '';
-    const slot   = r[2] ?? '';
+    const spec   = r[2] ?? '';
+    const slot   = r[3] ?? '';
     if (!charId || !slot) continue;
-    map.set(`${charId}:${slot}`, {
+    map.set(`${charId}:${spec}:${slot}`, {
       charId,
       charName:        r[1] ?? '',
+      spec,
       slot,
-      overallBISTrack: r[3] ?? '',
-      raidBISTrack:    r[4] ?? '',
-      otherTrack:      r[5] ?? '',
-      updatedAt:       r[6] ?? '',
+      overallBISTrack: r[4] ?? '',
+      raidBISTrack:    r[5] ?? '',
+      otherTrack:      r[6] ?? '',
+      updatedAt:       r[7] ?? '',
     });
   }
   return map;
@@ -422,7 +424,7 @@ const TEAM_TAB_DEFS = {
   config:         { range: 'Config!A2:B',           parse: parseConfigRows },
   raids:          { range: 'Raids!A2:E',            parse: parseRaidsRows },
   tierSnapshot:   { range: 'Tier Snapshot!A2:F',    parse: parseTierSnapshotRows },
-  wornBis:        { range: 'Worn BIS!A2:G',         parse: parseWornBisRows },
+  wornBis:        { range: 'Worn BIS!A2:H',         parse: parseWornBisRows },
 };
 
 /**
@@ -1740,7 +1742,7 @@ export async function upsertTierSnapshot(sheetId, snapshots) {
 // ── Worn BIS ──────────────────────────────────────────────────────────────────
 
 /**
- * Worn BIS tab  (A=CharId B=CharName C=Slot D=OverallBISTrack E=RaidBISTrack F=OtherTrack G=UpdatedAt)
+ * Worn BIS tab  (A=CharId B=CharName C=Spec D=Slot E=OverallBISTrack F=RaidBISTrack G=OtherTrack H=UpdatedAt)
  * One row per character × slot. Tracks the highest upgrade track ever worn for each
  * BIS category per slot. "Best ever" — values only increase, never decrease.
  *
@@ -1751,36 +1753,36 @@ export async function upsertTierSnapshot(sheetId, snapshots) {
  */
 export async function getWornBis(sheetId) {
   log.verbose(`[sheets] getWornBis (sheet ${sheetId.slice(-6)})`);
-  return cachedRead(sheetId, 'wornBis', async () => parseWornBisRows(await readRange(sheetId, 'Worn BIS!A2:G')));
+  return cachedRead(sheetId, 'wornBis', async () => parseWornBisRows(await readRange(sheetId, 'Worn BIS!A2:H')));
 }
 
 /**
- * Upsert Worn BIS rows. Keyed by CharId + Slot (composite) — one row per character per slot.
+ * Upsert Worn BIS rows. Keyed by CharId + Spec + Slot — one row per character per spec per slot.
  *
  * @param {string}   sheetId
- * @param {object[]} rows  Array of { charId, charName, slot, overallBISTrack, raidBISTrack, otherTrack }
+ * @param {object[]} rows  Array of { charId, charName, spec, slot, overallBISTrack, raidBISTrack, otherTrack }
  */
 export async function upsertWornBis(sheetId, rows) {
   if (!rows.length) return;
   log.verbose(`[sheets] upsertWornBis (sheet ${sheetId.slice(-6)}) — ${rows.length} row(s)`);
-  const existing = await readRange(sheetId, 'Worn BIS!A2:C');
+  const existing = await readRange(sheetId, 'Worn BIS!A2:D');
   const updates  = [];
   const appends  = [];
   const now      = new Date().toISOString();
 
   for (const row of rows) {
-    const rowIdx = existing.findIndex(r => r[0] === row.charId && r[2] === row.slot);
-    const cells  = [row.charId, row.charName, row.slot, row.overallBISTrack, row.raidBISTrack, row.otherTrack, now];
+    const rowIdx = existing.findIndex(r => r[0] === row.charId && r[2] === row.spec && r[3] === row.slot);
+    const cells  = [row.charId, row.charName, row.spec, row.slot, row.overallBISTrack, row.raidBISTrack, row.otherTrack, now];
     if (rowIdx >= 0) {
-      updates.push({ range: `Worn BIS!A${rowIdx + 2}:G${rowIdx + 2}`, values: [cells] });
+      updates.push({ range: `Worn BIS!A${rowIdx + 2}:H${rowIdx + 2}`, values: [cells] });
     } else {
       appends.push(cells);
-      existing.push([row.charId, row.charName, row.slot]); // prevent duplicate appends within same batch
+      existing.push([row.charId, row.charName, row.spec, row.slot]); // prevent duplicate appends within same batch
     }
   }
 
   if (updates.length) await batchWriteRanges(sheetId, updates);
-  if (appends.length) await appendRows(sheetId, 'Worn BIS!A:G', appends);
+  if (appends.length) await appendRows(sheetId, 'Worn BIS!A:H', appends);
   cacheInvalidate(sheetId, 'wornBis');
 }
 
@@ -1791,21 +1793,21 @@ export async function upsertWornBis(sheetId, rows) {
  * otherTrack is intentionally preserved.
  *
  * @param {string}   sheetId
- * @param {object[]} targets  Array of { charId, slot }
+ * @param {object[]} targets  Array of { charId, slot } — invalidates all specs for that char+slot
  */
 export async function invalidateWornBisSlots(sheetId, targets) {
   if (!targets.length) return;
   log.verbose(`[sheets] invalidateWornBisSlots (sheet ${sheetId.slice(-6)}) — ${targets.length} target(s)`);
   const targetSet = new Set(targets.map(t => `${t.charId}:${t.slot}`));
-  const existing  = await readRange(sheetId, 'Worn BIS!A2:G');
+  const existing  = await readRange(sheetId, 'Worn BIS!A2:H');
   const updates   = [];
   for (let i = 0; i < existing.length; i++) {
     const r      = existing[i];
     const charId = r[0] ?? '';
-    const slot   = r[2] ?? '';
+    const slot   = r[3] ?? '';
     if (!targetSet.has(`${charId}:${slot}`)) continue;
-    // Blank D (OverallBISTrack) and E (RaidBISTrack) only; preserve otherTrack
-    updates.push({ range: `Worn BIS!D${i + 2}:E${i + 2}`, values: [['', '']] });
+    // Blank E (OverallBISTrack) and F (RaidBISTrack) only; preserve otherTrack
+    updates.push({ range: `Worn BIS!E${i + 2}:F${i + 2}`, values: [['', '']] });
   }
   if (updates.length) await batchWriteRanges(sheetId, updates);
   cacheInvalidate(sheetId, 'wornBis');
@@ -1822,8 +1824,8 @@ export async function clearWornBis(sheetId) {
   // Read how many rows exist so we can overwrite them with blanks
   const existing = await readRange(sheetId, 'Worn BIS!A2:A');
   if (!existing.length) return;
-  const blankRows = existing.map(() => ['', '', '', '', '', '', '']);
-  await writeRange(sheetId, 'Worn BIS!A2:G', blankRows);
+  const blankRows = existing.map(() => ['', '', '', '', '', '', '', '']);
+  await writeRange(sheetId, 'Worn BIS!A2:H', blankRows);
   cacheInvalidate(sheetId, 'wornBis');
 }
 
