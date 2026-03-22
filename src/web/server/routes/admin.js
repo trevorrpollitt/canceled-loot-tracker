@@ -255,11 +255,14 @@ router.get('/bis-review', requireOfficer, async (c) => {
     const approvedByKey = new Map();
     for (const s of allSubmissions) {
       if (s.status !== 'Approved') continue;
-      approvedByKey.set(s.charName + '::' + s.slot, { trueBis: s.trueBis ?? '', raidBis: s.raidBis ?? '' });
+      // Key includes spec so multi-spec characters get the correct current value per spec
+      const key = (s.charId || s.charName) + '::' + (s.spec ?? '') + '::' + s.slot;
+      approvedByKey.set(key, { trueBis: s.trueBis ?? '', raidBis: s.raidBis ?? '' });
     }
 
-    const resolveCurrent = (charName, spec, slot) => {
-      const approved = approvedByKey.get(charName + '::' + slot);
+    const resolveCurrent = (charName, spec, slot, charId) => {
+      const key     = (charId || charName) + '::' + (spec ?? '') + '::' + slot;
+      const approved = approvedByKey.get(key);
       if (approved) return { ...approved, isDefault: false, defaultSource: null };
       const def = specDefaultByKey.get(toCanonical(spec) + '::' + slot);
       if (def)      return { ...def,      isDefault: true,  defaultSource: def.source ?? null };
@@ -270,7 +273,7 @@ router.get('/bis-review', requireOfficer, async (c) => {
     const groupMap = new Map();
     for (const s of pending) {
       if (!groupMap.has(s.charName)) groupMap.set(s.charName, { charName: s.charName, spec: s.spec, submissions: [] });
-      const current = resolveCurrent(s.charName, s.spec, s.slot);
+      const current = resolveCurrent(s.charName, s.spec, s.slot, s.charId);
       groupMap.get(s.charName).submissions.push({
         id: s.id, slot: s.slot,
         current: current ? {
