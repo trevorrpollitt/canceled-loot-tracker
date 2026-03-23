@@ -220,6 +220,76 @@ function BisTable({ bis, specDefaults, loot, wornBis = {} }) {
   );
 }
 
+// ── SimC import ───────────────────────────────────────────────────────────────
+
+function SimcImport({ activeSpec, onImported }) {
+  const [open,    setOpen]    = useState(false);
+  const [text,    setText]    = useState('');
+  const [status,  setStatus]  = useState(null); // null | 'loading' | { ok, message }
+
+  const handleSubmit = async () => {
+    if (!text.trim()) return;
+    setStatus('loading');
+    try {
+      const res = await fetch(apiPath('/api/dashboard/simc'), {
+        method:      'POST',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+        body:        JSON.stringify({ simcText: text, spec: activeSpec }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus({ ok: false, message: json.error ?? 'Import failed' });
+      } else {
+        setStatus({ ok: true, message: `Updated ${json.updated} slot${json.updated !== 1 ? 's' : ''}${json.tierPieces ? `, ${json.tierPieces} tier piece${json.tierPieces !== 1 ? 's' : ''}` : ''}.` });
+        setText('');
+        onImported?.();
+      }
+    } catch {
+      setStatus({ ok: false, message: 'Network error — try again.' });
+    }
+  };
+
+  return (
+    <section className="card">
+      <div className="card-title-row">
+        <h3 className="card-title">SimC Import</h3>
+        <button className="btn-secondary btn-sm" onClick={() => { setOpen(o => !o); setStatus(null); }}>
+          {open ? 'Cancel' : 'Import gear'}
+        </button>
+      </div>
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+            Paste your SimulationCraft export below. Only equipped gear is read — talents and other settings are ignored.
+          </p>
+          <textarea
+            value={text}
+            onChange={e => { setText(e.target.value); setStatus(null); }}
+            placeholder="Paste SimC export here…"
+            rows={8}
+            style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              className="btn-primary btn-sm"
+              onClick={handleSubmit}
+              disabled={status === 'loading' || !text.trim()}
+            >
+              {status === 'loading' ? 'Importing…' : 'Import'}
+            </button>
+            {status && status !== 'loading' && (
+              <span style={{ fontSize: '0.85rem', color: status.ok ? 'var(--color-success, #4caf50)' : 'var(--color-danger, #e74c3c)' }}>
+                {status.message}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ── Dashboard page ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -406,6 +476,8 @@ export default function Dashboard() {
           wornBis={data.wornBis ?? {}}
         />
       </section>
+
+      <SimcImport activeSpec={activeSpec} onImported={() => loadDashboard(activeSpec)} />
 
       <section className="card">
         <h3 className="card-title">Loot History</h3>

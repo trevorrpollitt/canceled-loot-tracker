@@ -168,12 +168,32 @@ export const ALL_SPECS = Object.values(CLASS_SPECS).flat();
 // ── Track utilities ───────────────────────────────────────────────────────────
 
 export const TRACK_ORDER = { Crafted: -1, Veteran: 0, Champion: 1, Hero: 2, Mythic: 3 };
+const TRACK_NAMES = ['Veteran', 'Champion', 'Hero', 'Mythic'];
 
 /** Returns the higher of two upgrade track strings. Null/empty = lowest. */
 export function mergeTrack(a, b) {
   if (!a) return b ?? '';
   if (!b) return a;
   return (TRACK_ORDER[a] ?? -1) >= (TRACK_ORDER[b] ?? -1) ? a : b;
+}
+
+/**
+ * Build the 4 upgrade-track ranges from the Veteran start bonus ID.
+ * Each track covers [startId + i*8, startId + i*8 + 7] inclusive.
+ * Returns an empty array if veteranStartId is falsy (tracks will show Unknown).
+ */
+export function buildTrackRanges(veteranStartId) {
+  if (!veteranStartId) return [];
+  return TRACK_NAMES.map((track, i) => ({ bonusId: veteranStartId + i * 8, track }));
+}
+
+/** Returns the upgrade track name for an item given its bonus IDs, or 'Unknown' if not found. */
+export function getItemTrack(bonusIDs, trackRanges) {
+  for (const bonusId of bonusIDs ?? []) {
+    const row = trackRanges.find(r => bonusId >= r.bonusId && bonusId <= r.bonusId + 7);
+    if (row) return row.track;
+  }
+  return 'Unknown';
 }
 
 /** Armor type for each class. */

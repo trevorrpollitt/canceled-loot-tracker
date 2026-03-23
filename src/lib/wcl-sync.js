@@ -74,21 +74,8 @@ import {
   getReportFights,
   getCombatantInfo,
 } from './wcl.js';
-import { matchesBis } from './bis-match.js';
-import { getArmorType, toCanonical, getCharSpecs, WOW_SPEC_ID_TO_NAME, mergeTrack, TRACK_ORDER } from './specs.js';
-
-// Upgrade tracks in order — each spans 8 consecutive bonus IDs from veteran_start
-const TRACK_NAMES = ['Veteran', 'Champion', 'Hero', 'Mythic'];
-
-/**
- * Build the 4 upgrade-track ranges from the Veteran start bonus ID.
- * Each track covers [startId + i*8, startId + i*8 + 7] inclusive.
- * Returns an empty array if veteranStartId is falsy (tracks will show Unknown).
- */
-function buildTrackRanges(veteranStartId) {
-  if (!veteranStartId) return [];
-  return TRACK_NAMES.map((track, i) => ({ bonusId: veteranStartId + i * 8, track }));
-}
+import { matchesBis, PAIRED_BIS_SLOTS } from './bis-match.js';
+import { getArmorType, toCanonical, getCharSpecs, WOW_SPEC_ID_TO_NAME, mergeTrack, TRACK_ORDER, buildTrackRanges, getItemTrack } from './specs.js';
 
 // WCL difficulty integer → human label
 const DIFFICULTY_LABEL = {
@@ -108,24 +95,6 @@ const WCL_SLOT_MAP = {
   16: 'Off-Hand',
 };
 
-// Paired slots — for rings and trinkets, an item in either physical slot can
-// satisfy either BIS entry (e.g. Ring 2 BIS worn in slot 1 still counts).
-const PAIRED_BIS_SLOTS = {
-  'Ring 1':    ['Ring 1', 'Ring 2'],
-  'Ring 2':    ['Ring 1', 'Ring 2'],
-  'Trinket 1': ['Trinket 1', 'Trinket 2'],
-  'Trinket 2': ['Trinket 1', 'Trinket 2'],
-};
-
-
-/** Returns track name for an item (from bonusIDs), or 'Unknown' if not found. */
-function getItemTrack(bonusIDs, trackRanges) {
-  for (const bonusId of bonusIDs ?? []) {
-    const row = trackRanges.find(r => bonusId >= r.bonusId && bonusId <= r.bonusId + 7);
-    if (row) return row.track;
-  }
-  return 'Unknown';
-}
 
 /**
  * Extract worn BIS data from CombatantInfo events for a single report.

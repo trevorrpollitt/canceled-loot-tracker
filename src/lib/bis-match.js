@@ -1,9 +1,20 @@
 /**
- * bis-match.js — BIS item matching logic shared between the council route and WCL sync.
+ * bis-match.js — BIS item matching logic shared between the council route, WCL sync, and SimC import.
  *
  * `item` must have the shape returned by getItemDb:
  *   { itemId, name, slot, armorType, isTierToken }
  */
+
+/**
+ * Paired slots — for rings and trinkets, an item in either physical slot can
+ * satisfy either BIS entry (e.g. Ring 2 BIS worn in Ring 1 slot still counts).
+ */
+export const PAIRED_BIS_SLOTS = {
+  'Ring 1':    ['Ring 1', 'Ring 2'],
+  'Ring 2':    ['Ring 1', 'Ring 2'],
+  'Trinket 1': ['Trinket 1', 'Trinket 2'],
+  'Trinket 2': ['Trinket 1', 'Trinket 2'],
+};
 
 /**
  * Returns true if `item` satisfies the given BIS value for a character with
