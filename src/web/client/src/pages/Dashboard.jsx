@@ -264,6 +264,7 @@ function SimcModal({ open, onClose, activeSpec, onImported }) {
           Paste your SimulationCraft export below. Only equipped gear is read — talents and other settings are ignored.
         </p>
         <textarea
+          autoFocus
           value={text}
           onChange={e => { setText(e.target.value); setStatus(null); }}
           placeholder="Paste SimC export here…"
