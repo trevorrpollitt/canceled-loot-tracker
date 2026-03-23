@@ -75,7 +75,7 @@ import {
   getCombatantInfo,
 } from './wcl.js';
 import { matchesBis } from './bis-match.js';
-import { getArmorType, toCanonical, getCharSpecs, WOW_SPEC_ID_TO_NAME } from './specs.js';
+import { getArmorType, toCanonical, getCharSpecs, WOW_SPEC_ID_TO_NAME, mergeTrack, TRACK_ORDER } from './specs.js';
 
 // Upgrade tracks in order — each spans 8 consecutive bonus IDs from veteran_start
 const TRACK_NAMES = ['Veteran', 'Champion', 'Hero', 'Mythic'];
@@ -117,14 +117,6 @@ const PAIRED_BIS_SLOTS = {
   'Trinket 2': ['Trinket 1', 'Trinket 2'],
 };
 
-const TRACK_ORDER = { Crafted: -1, Veteran: 0, Champion: 1, Hero: 2, Mythic: 3 };
-
-/** Returns the higher of two track strings. Null/empty = lowest. */
-function mergeTrack(a, b) {
-  if (!a) return b ?? '';
-  if (!b) return a;
-  return (TRACK_ORDER[a] ?? -1) >= (TRACK_ORDER[b] ?? -1) ? a : b;
-}
 
 /** Returns track name for an item (from bonusIDs), or 'Unknown' if not found. */
 function getItemTrack(bonusIDs, trackRanges) {
@@ -220,6 +212,8 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
           ...prev,
           overallBISTrack: matchesOverall ? mergeTrack(prev.overallBISTrack, recordTrack) : prev.overallBISTrack,
           raidBISTrack:    matchesRaid    ? mergeTrack(prev.raidBISTrack,    recordTrack) : prev.raidBISTrack,
+          // OtherTrack is the highest track seen in this slot regardless of BIS category
+          otherTrack:      mergeTrack(prev.otherTrack, recordTrack),
         });
       }
 
@@ -721,6 +715,7 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
         ...prev,
         overallBISTrack: matchesOverall ? mergeTrack(prev.overallBISTrack, track) : prev.overallBISTrack,
         raidBISTrack:    matchesRaid    ? mergeTrack(prev.raidBISTrack, track)    : prev.raidBISTrack,
+        otherTrack:      mergeTrack(prev.otherTrack, track),
       });
     }
   }

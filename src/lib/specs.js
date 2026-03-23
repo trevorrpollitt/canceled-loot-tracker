@@ -165,6 +165,17 @@ export const CLASS_SPECS = {
 /** Flat list of all sheet spec names. */
 export const ALL_SPECS = Object.values(CLASS_SPECS).flat();
 
+// ── Track utilities ───────────────────────────────────────────────────────────
+
+export const TRACK_ORDER = { Crafted: -1, Veteran: 0, Champion: 1, Hero: 2, Mythic: 3 };
+
+/** Returns the higher of two upgrade track strings. Null/empty = lowest. */
+export function mergeTrack(a, b) {
+  if (!a) return b ?? '';
+  if (!b) return a;
+  return (TRACK_ORDER[a] ?? -1) >= (TRACK_ORDER[b] ?? -1) ? a : b;
+}
+
 /** Armor type for each class. */
 const ARMOR_TYPE_BY_CLASS = {
   'Mage':         'Cloth',   'Priest':    'Cloth',   'Warlock':      'Cloth',
