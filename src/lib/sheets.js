@@ -21,6 +21,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { log } from './logger.js';
+import { mergeTrack } from './specs.js';
 
 // ── Auth — Web Crypto JWT (works in Cloudflare Workers and Node.js 18+) ────────
 
@@ -1719,13 +1720,35 @@ export async function getTierSnapshot(sheetId) {
 export async function upsertTierSnapshot(sheetId, snapshots) {
   if (!snapshots.length) return;
   log.verbose(`[sheets] upsertTierSnapshot (sheet ${sheetId.slice(-6)}) — ${snapshots.length} row(s)`);
-  const existing = await readRange(sheetId, 'Tier Snapshot!A2:A');
+  // Read A:E so we can merge tierDetail (col E) best-ever rather than overwriting
+  const existing = await readRange(sheetId, 'Tier Snapshot!A2:E');
   const updates  = [];
   const appends  = [];
 
   for (const snap of snapshots) {
     const rowIdx = existing.findIndex(r => r[0] === snap.charId);
-    const cells  = [snap.charId, snap.charName, snap.raidId, snap.tierCount, snap.tierDetail, snap.updatedAt];
+
+    // Merge tierDetail: keep the highest track seen per slot across all syncs
+    let mergedDetail = snap.tierDetail;
+    if (rowIdx >= 0) {
+      const existingDetail = existing[rowIdx][4] ?? '';
+      if (existingDetail) {
+        const merged = new Map();
+        for (const part of existingDetail.split('|')) {
+          const [slot, track] = part.split(':');
+          if (slot && track) merged.set(slot, track);
+        }
+        for (const part of snap.tierDetail.split('|')) {
+          const [slot, track] = part.split(':');
+          if (slot && track) merged.set(slot, mergeTrack(merged.get(slot) ?? '', track));
+        }
+        mergedDetail = [...merged.entries()].map(([s, t]) => `${s}:${t}`).join('|');
+      }
+    }
+
+    const mergedCount = mergedDetail ? mergedDetail.split('|').length : 0;
+    const cells = [snap.charId, snap.charName, snap.raidId, mergedCount, mergedDetail, snap.updatedAt];
+
     if (rowIdx >= 0) {
       updates.push({ range: `Tier Snapshot!A${rowIdx + 2}:F${rowIdx + 2}`, values: [cells] });
     } else {
