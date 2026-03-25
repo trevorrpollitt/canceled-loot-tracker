@@ -66,33 +66,48 @@ function computeSpecBisMatch(charKey, spec, item, itemSlot, approvedBis, default
   const canonSpec  = toCanonical(spec);
   const armorType  = getArmorType(canonSpec);
 
-  let personalSub = null;
-  for (const key of [charKey + '|' + itemSlot, charKey + '|' + itemSlot + ' 1', charKey + '|' + itemSlot + ' 2']) {
-    // Match approved BIS to this spec
-    const sub = approvedBis[key];
-    if (sub && (!sub.spec || sub.spec.toLowerCase() === spec.toLowerCase())) { personalSub = sub; break; }
+  // For paired slots (Ring, Trinket) a character has separate BIS entries for slot 1 and slot 2.
+  // We must check ALL slot variants and return the best match across them — stopping at the first
+  // variant would miss a match in the other slot (e.g. Trinket 1 has a non-match but Trinket 2 has one).
+  const slotVariants = [itemSlot, itemSlot + ' 1', itemSlot + ' 2'];
+
+  const matchRank = v => v === true ? 3 : v === 'catalyst' ? 2 : v === 'crafted' ? 1 : 0;
+
+  let overallBisMatch  = false;
+  let raidBisMatch     = false;
+  let hasRaidBis       = false;
+  let effectiveTrueBis = '';
+
+  for (const slotVar of slotVariants) {
+    const sub = approvedBis[charKey + '|' + slotVar];
+    if (sub?.spec && sub.spec.toLowerCase() !== spec.toLowerCase()) continue;
+
+    const defRow = defaultBisMap[canonSpec + '|' + slotVar] ?? null;
+
+    const trueBis   = sub?.trueBis       ?? defRow?.trueBis       ?? '';
+    const trueBisId = sub?.trueBisItemId  ?? defRow?.trueBisItemId  ?? '';
+    const raidBis   = sub?.raidBis       ?? defRow?.raidBis       ?? '';
+    const raidBisId = sub?.raidBisItemId  ?? defRow?.raidBisItemId  ?? '';
+
+    if (!trueBis && !raidBis) continue;
+    if (!effectiveTrueBis) effectiveTrueBis = trueBis;
+
+    let slotOvMatch;
+    if      (trueBis === '<Crafted>')  slotOvMatch = 'crafted';
+    else if (trueBis === '<Catalyst>') slotOvMatch = 'catalyst';
+    else if (trueBis)                  slotOvMatch = matchesBis(trueBis, trueBisId, item, armorType, slotVar);
+    else                               slotOvMatch = false;
+
+    if (matchRank(slotOvMatch) > matchRank(overallBisMatch)) overallBisMatch = slotOvMatch;
+
+    const resolvedRaidBis   = raidBis   || (trueBis !== '<Crafted>' ? trueBis   : '');
+    const resolvedRaidBisId = raidBisId || (trueBis !== '<Crafted>' ? trueBisId : '');
+
+    if (resolvedRaidBis) hasRaidBis = true;
+    if (resolvedRaidBis && matchesBis(resolvedRaidBis, resolvedRaidBisId, item, armorType, slotVar)) raidBisMatch = true;
   }
 
-  const defRow = defaultBisMap[canonSpec + '|' + itemSlot]
-              ?? defaultBisMap[canonSpec + '|' + itemSlot + ' 1']
-              ?? defaultBisMap[canonSpec + '|' + itemSlot + ' 2']
-              ?? null;
-
-  const effectiveTrueBis   = personalSub?.trueBis      ?? defRow?.trueBis      ?? '';
-  const effectiveTrueBisId = personalSub?.trueBisItemId ?? defRow?.trueBisItemId ?? '';
-  const effectiveRaidBis   = personalSub?.raidBis      ?? defRow?.raidBis      ?? '';
-  const effectiveRaidBisId = personalSub?.raidBisItemId ?? defRow?.raidBisItemId ?? '';
-
-  let overallBisMatch;
-  if (effectiveTrueBis === '<Crafted>') overallBisMatch = 'crafted';
-  else if (effectiveTrueBis === '<Catalyst>') overallBisMatch = 'catalyst';
-  else overallBisMatch = matchesBis(effectiveTrueBis, effectiveTrueBisId, item, armorType, itemSlot);
-
-  const resolvedRaidBis   = effectiveRaidBis   || (effectiveTrueBis !== '<Crafted>' ? effectiveTrueBis   : '');
-  const resolvedRaidBisId = effectiveRaidBisId || (effectiveTrueBis !== '<Crafted>' ? effectiveTrueBisId : '');
-  const raidBisMatch      = resolvedRaidBis ? matchesBis(resolvedRaidBis, resolvedRaidBisId, item, armorType, itemSlot) : false;
-
-  return { overallBisMatch, raidBisMatch, hasRaidBis: Boolean(resolvedRaidBis), effectiveTrueBis };
+  return { overallBisMatch, raidBisMatch, hasRaidBis, effectiveTrueBis };
 }
 
 router.get('/items', async (c) => {
