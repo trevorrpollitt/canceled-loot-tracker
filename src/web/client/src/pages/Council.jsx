@@ -89,9 +89,12 @@ function scoreCandidates(candidates, selectedDifficulty, tierDistPriority, heroi
     // Uses aggregate wornBis (max across paired slots) — overallBISTrack is '' when they have
     // never worn the BIS item, so a non-BIS Hero item (otherTrack) does NOT trigger this
     // (Culveron case). Only fires when they have specifically worn their BIS at this track.
+    // For Overall BIS, use the strict MIN across paired slots (minOvBISTrack) — only penalise
+    // when ALL paired slots already have the item. Using the MAX aggregate (overallBISTrack) would
+    // incorrectly penalise a character who has the item in Trinket 1 but still needs it for Trinket 2.
     const alreadyOwnsBis =
-      (c.overallBisMatch === true && (TRACK_RANK[wornS.overallBISTrack ?? ''] ?? 0) >= itemTrackRank) ||
-      (c.raidBisMatch             && (TRACK_RANK[wornS.raidBISTrack    ?? ''] ?? 0) >= itemTrackRank) ||
+      (c.overallBisMatch === true && (TRACK_RANK[minOvBISTrack] ?? 0) >= itemTrackRank) ||
+      (c.raidBisMatch             && (TRACK_RANK[wornS.raidBISTrack ?? ''] ?? 0) >= itemTrackRank) ||
       slotAlreadySatisfied;
     const finalScore = (trackDelta < 0 && relevantTrackRank > 0) || alreadyOwnsBis
       ? -1_000_000_000
