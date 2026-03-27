@@ -68,10 +68,13 @@ function scoreCandidates(candidates, selectedDifficulty, tierDistPriority, heroi
       : (c.raidBisMatch && !slotAlreadySatisfied)          ? 2
       : 0;
 
+    // Use per-match-slot tracks here too — the aggregate from the other paired slot would
+    // incorrectly inflate relevantTrackRank (e.g. Narestrasz has Hero in Trinket 2 but
+    // the dropping item goes into Trinket 1 which may have nothing).
     const relevantTrackRank = Math.max(
-      TRACK_RANK[wornS.overallBISTrack ?? ''] ?? 0,
-      TRACK_RANK[wornS.raidBISTrack    ?? ''] ?? 0,
-      TRACK_RANK[wornS.otherTrack      ?? ''] ?? 0,
+      TRACK_RANK[wornS.ovMatchWornTrack   ?? wornS.overallBISTrack ?? ''] ?? 0,
+      TRACK_RANK[wornS.raidMatchWornTrack ?? wornS.raidBISTrack    ?? ''] ?? 0,
+      TRACK_RANK[wornS.otherTrack ?? ''] ?? 0,
     );
     const trackDelta = itemTrackRank - relevantTrackRank;
 
