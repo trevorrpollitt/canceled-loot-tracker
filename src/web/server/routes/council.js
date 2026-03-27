@@ -94,7 +94,14 @@ function isEligible(item, charArmorType, canonSpec) {
 
 /**
  * Compute BIS match fields for a single (char, spec, item) combination.
- * @returns {{ overallBisMatch, raidBisMatch, hasRaidBis, effectiveTrueBis }}
+ *
+ * Also returns the specific numbered slot(s) where each match was found so callers
+ * can look up the per-slot worn BIS track rather than relying on the aggregate.
+ * For bare slot variants (e.g. 'Trinket'), SLOT_EXPANSIONS is used to resolve to
+ * numbered slots ('Trinket 1', 'Trinket 2').
+ *
+ * @returns {{ overallBisMatch, raidBisMatch, hasRaidBis, effectiveTrueBis,
+ *             overallMatchSlots: Set<string>, raidMatchSlots: Set<string> }}
  */
 function computeSpecBisMatch(charKey, spec, item, itemSlot, approvedBis, defaultBisMap) {
   const canonSpec  = toCanonical(spec);
@@ -115,10 +122,16 @@ function computeSpecBisMatch(charKey, spec, item, itemSlot, approvedBis, default
 
   const matchRank = v => v === true ? 3 : v === 'catalyst' ? 2 : v === 'crafted' ? 1 : 0;
 
+  // Expand bare slot name to numbered variants for worn-BIS lookups.
+  // 'Trinket' → ['Trinket 1', 'Trinket 2'], 'Weapon' → ['Weapon'], etc.
+  const expandSlot = s => SLOT_EXPANSIONS[s] ?? [s];
+
   let overallBisMatch  = false;
   let raidBisMatch     = false;
   let hasRaidBis       = false;
   let effectiveTrueBis = '';
+  const overallMatchSlots = new Set(); // numbered worn-BIS slots for the best overall match
+  const raidMatchSlots    = new Set(); // numbered worn-BIS slots for all raid BIS matches
 
   for (const slotVar of slotVariants) {
     const sub = approvedBis[charKey + '|' + slotVar];
@@ -140,16 +153,48 @@ function computeSpecBisMatch(charKey, spec, item, itemSlot, approvedBis, default
     else if (trueBis)                  slotOvMatch = matchesBis(trueBis, trueBisId, item, armorType, slotVar);
     else                               slotOvMatch = false;
 
-    if (matchRank(slotOvMatch) > matchRank(overallBisMatch)) overallBisMatch = slotOvMatch;
+    const slotRank = matchRank(slotOvMatch);
+    const bestRank = matchRank(overallBisMatch);
+    if (slotRank > 0) {
+      if (slotRank > bestRank) {
+        // Strictly better match — discard previously tracked slots
+        overallBisMatch = slotOvMatch;
+        overallMatchSlots.clear();
+      }
+      if (slotRank >= matchRank(overallBisMatch)) {
+        // Equal-or-better quality: record the numbered slot(s) for worn-BIS lookup
+        for (const s of expandSlot(slotVar)) overallMatchSlots.add(s);
+      }
+    }
 
     const resolvedRaidBis   = raidBis   || (trueBis !== '<Crafted>' ? trueBis   : '');
     const resolvedRaidBisId = raidBisId || (trueBis !== '<Crafted>' ? trueBisId : '');
 
     if (resolvedRaidBis) hasRaidBis = true;
-    if (resolvedRaidBis && matchesBis(resolvedRaidBis, resolvedRaidBisId, item, armorType, slotVar)) raidBisMatch = true;
+    if (resolvedRaidBis && matchesBis(resolvedRaidBis, resolvedRaidBisId, item, armorType, slotVar)) {
+      raidBisMatch = true;
+      for (const s of expandSlot(slotVar)) raidMatchSlots.add(s);
+    }
   }
 
-  return { overallBisMatch, raidBisMatch, hasRaidBis, effectiveTrueBis };
+  return { overallBisMatch, raidBisMatch, hasRaidBis, effectiveTrueBis, overallMatchSlots, raidMatchSlots };
+}
+
+/**
+ * Returns the minimum worn track for a given field across a set of specific slots.
+ * "Minimum" uses TRACK_ORDER where '' = -1 (never worn = lowest priority).
+ * If any slot in the set has never been worn (''), the minimum is '' — meaning
+ * the character still needs the item for at least one matched slot.
+ */
+function minWornTrackForSlots(wornBisMap, charId, spec, slots, field) {
+  let min = null;
+  for (const slot of slots) {
+    const w = wornBisMap.get(`${charId}:${spec}:${slot}`);
+    const track = w?.[field] ?? '';
+    if (min === null) { min = track; continue; }
+    if ((TRACK_ORDER[track] ?? -1) < (TRACK_ORDER[min] ?? -1)) min = track;
+  }
+  return min ?? '';
 }
 
 router.get('/items', async (c) => {
@@ -271,11 +316,18 @@ router.get('/candidates', async (c) => {
       const primaryArmor   = getArmorType(primaryCanon);
       if (!isEligible(item, primaryArmor, primaryCanon)) continue;
 
-      const { overallBisMatch, raidBisMatch, hasRaidBis } =
+      const { overallBisMatch, raidBisMatch, hasRaidBis, overallMatchSlots, raidMatchSlots } =
         computeSpecBisMatch(charKey, charSpec.primary, item, itemSlot, approvedBis, defaultBisMap);
 
       const s    = stats[charKey] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
       const acct = acctStats[char.ownerId] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
+
+      // Per-match-slot worn tracks: minimum overallBISTrack / raidBISTrack across the specific
+      // numbered slot(s) where the BIS match was found. Unlike the aggregate (MAX across all paired
+      // slots), the minimum correctly handles cases like "has item in Trinket 1 but not Trinket 2"
+      // and "raidBISTrack='Hero' comes from a different slot than the matching slot".
+      const ovMatchWornTrack   = minWornTrackForSlots(wornBisMap, char.charId, char.spec, overallMatchSlots, 'overallBISTrack');
+      const raidMatchWornTrack = minWornTrackForSlots(wornBisMap, char.charId, char.spec, raidMatchSlots,    'raidBISTrack');
 
       // Secondary spec BIS matches — only for specs eligible for this item
       const secondarySpecCandidates = charSpec.secondary
@@ -297,7 +349,7 @@ router.get('/candidates', async (c) => {
         acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
         raidsAttended: raidsByOwner[char.ownerId] ?? 0,
         overallBisMatch, raidBisMatch, hasRaidBis,
-        wornBis: getWornTracksForSlot(wornBisMap, char.charId, char.spec, itemSlot),
+        wornBis: { ...getWornTracksForSlot(wornBisMap, char.charId, char.spec, itemSlot), ovMatchWornTrack, raidMatchWornTrack },
         secondarySpecCandidates,
         ...(item.isTierToken && { tierSlots: tierSnapshotMap.get(char.charId) ?? {} }),
       });

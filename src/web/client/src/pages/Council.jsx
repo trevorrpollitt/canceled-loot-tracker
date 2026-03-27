@@ -89,12 +89,15 @@ function scoreCandidates(candidates, selectedDifficulty, tierDistPriority, heroi
     // Uses aggregate wornBis (max across paired slots) — overallBISTrack is '' when they have
     // never worn the BIS item, so a non-BIS Hero item (otherTrack) does NOT trigger this
     // (Culveron case). Only fires when they have specifically worn their BIS at this track.
-    // For Overall BIS, use the strict MIN across paired slots (minOvBISTrack) — only penalise
-    // when ALL paired slots already have the item. Using the MAX aggregate (overallBISTrack) would
-    // incorrectly penalise a character who has the item in Trinket 1 but still needs it for Trinket 2.
+    // Use per-match-slot worn tracks (minimum across the specific slot(s) where the match was
+    // found) rather than the aggregate MAX across all paired slots. This prevents the aggregate
+    // raidBISTrack from Trinket 2 (a different item) from triggering a penalty on a Trinket 1
+    // match (Simlock case), and correctly handles "has it in slot 1 but needs slot 2" (Narestrasz).
+    // If overallBisMatch is set (true or 'catalyst'), only check overallBIS — raidBIS is irrelevant.
+    const hasOverallMatch = c.overallBisMatch === true || c.overallBisMatch === 'catalyst';
     const alreadyOwnsBis =
-      (c.overallBisMatch === true && (TRACK_RANK[minOvBISTrack] ?? 0) >= itemTrackRank) ||
-      (c.raidBisMatch             && (TRACK_RANK[wornS.raidBISTrack ?? ''] ?? 0) >= itemTrackRank) ||
+      (hasOverallMatch  && (TRACK_RANK[wornS.ovMatchWornTrack   ?? ''] ?? 0) >= itemTrackRank) ||
+      (!hasOverallMatch && c.raidBisMatch && (TRACK_RANK[wornS.raidMatchWornTrack ?? ''] ?? 0) >= itemTrackRank) ||
       slotAlreadySatisfied;
     const finalScore = (trackDelta < 0 && relevantTrackRank > 0) || alreadyOwnsBis
       ? -1_000_000_000
@@ -108,6 +111,14 @@ function scoreCandidates(candidates, selectedDifficulty, tierDistPriority, heroi
         baseScore, A, L,
         lootPerRaid: Math.round(lootPerRaid * 100) / 100,
         finalScore, alreadyOwnsBis, slotAlreadySatisfied,
+        // debug: worn track values fed into scoring
+        dbg_ovBIS:         wornS.overallBISTrack    ?? '(none)',
+        dbg_minOvBIS:      wornS.minOverallBISTrack ?? '(absent)',
+        dbg_minUsed:       minOvBISTrack,
+        dbg_ovMatchWorn:   wornS.ovMatchWornTrack   ?? '(absent)',
+        dbg_raidMatchWorn: wornS.raidMatchWornTrack ?? '(absent)',
+        dbg_raidBIS:       wornS.raidBISTrack       ?? '(none)',
+        dbg_other:         wornS.otherTrack         ?? '(none)',
       },
     };
   }).sort((a, b) => b._score - a._score);
@@ -467,6 +478,13 @@ function ScoreTooltip({ b, isTierToken, pos }) {
       {b.alreadyOwnsBis && !b.slotAlreadySatisfied && (
         <div className="cst-row cst-penalty"><span>Already owns BIS</span><span>→ penalised</span></div>
       )}
+      <div className="cst-divider" />
+      <div className="cst-row cst-sub"><span>ovBIS (agg)</span><span>{b.dbg_ovBIS}</span></div>
+      <div className="cst-row cst-sub"><span>ovMatch worn</span><span>{b.dbg_ovMatchWorn}</span></div>
+      <div className="cst-row cst-sub"><span>raidMatch worn</span><span>{b.dbg_raidMatchWorn}</span></div>
+      <div className="cst-row cst-sub"><span>minOvBIS</span><span>{b.dbg_minUsed}</span></div>
+      <div className="cst-row cst-sub"><span>raidBIS (agg)</span><span>{b.dbg_raidBIS}</span></div>
+      <div className="cst-row cst-sub"><span>other</span><span>{b.dbg_other}</span></div>
       <div className="cst-row cst-final"><span>Final</span><span>{b.finalScore.toLocaleString()}</span></div>
     </div>,
     document.body
