@@ -180,11 +180,12 @@ function getPriorityTags(c, selectedDifficulty) {
 
   const itemTrackRank  = TRACK_RANK[DIFFICULTY_TO_TRACK[selectedDifficulty] ?? 'Hero'];
   const worn           = c.wornBis ?? {};
-  // For tag display, compare against the best item they currently have in the slot
+  // Use per-match-slot tracks (not aggregate) so the tag reflects the slot where this item
+  // would actually go — not a different paired slot that happens to have a higher worn track.
   const currentBestRank = Math.max(
-    TRACK_RANK[worn.overallBISTrack ?? ''] ?? 0,
-    TRACK_RANK[worn.raidBISTrack    ?? ''] ?? 0,
-    TRACK_RANK[worn.otherTrack      ?? ''] ?? 0,
+    TRACK_RANK[worn.ovMatchWornTrack   ?? worn.overallBISTrack ?? ''] ?? 0,
+    TRACK_RANK[worn.raidMatchWornTrack ?? worn.raidBISTrack    ?? ''] ?? 0,
+    TRACK_RANK[worn.otherTrack         ?? ''] ?? 0,
     1, // no data → assume Veteran baseline
   );
   const currentBestTrack = TRACK_BY_RANK[currentBestRank] ?? '';
@@ -549,8 +550,8 @@ function CandidateRow({ c, isTierToken, itemSlot, tags, isOfficer }) {
         <td className="council-col-stats" title="Account total"><span className="council-stat-bis">{c.acctBisH}/{c.acctBisM}</span></td>
         <td className="council-col-stats" title="Account total"><span className="council-stat-nonbis">{c.acctNonBisH}/{c.acctNonBisM}</span></td>
         <td className="council-col-num">{c.raidsAttended}</td>
-        <td className="council-col-bis"><BisIndicator match={c.overallBisMatch} track={worn.overallBISTrack} /></td>
-        <td className="council-col-bis"><BisIndicator match={c.raidBisMatch} track={worn.raidBISTrack} /></td>
+        <td className="council-col-bis"><BisIndicator match={c.overallBisMatch} track={worn.ovMatchWornTrack ?? worn.overallBISTrack} /></td>
+        <td className="council-col-bis"><BisIndicator match={c.raidBisMatch} track={worn.raidMatchWornTrack ?? worn.raidBISTrack} /></td>
         <td className="council-col-bis"><MiniTrackBadge track={worn.otherTrack} /></td>
       </tr>
       {expanded && c.secondarySpecCandidates?.map(sc => {
