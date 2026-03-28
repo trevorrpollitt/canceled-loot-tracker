@@ -85,11 +85,21 @@ export default function LootHistory() {
 
   const { players } = data;
 
-  const visible = players.filter(p => {
-    if (p.status === 'Inactive' && !showInactive) return false;
-    if (p.status === 'Bench'    && !showBench)    return false;
-    return true;
-  });
+  const STATUS_GROUPS = [
+    { status: 'Active',   show: true        },
+    { status: 'Bench',    show: showBench   },
+    { status: 'Inactive', show: showInactive },
+  ];
+
+  const groups = STATUS_GROUPS
+    .filter(g => g.show)
+    .map(g => ({
+      label:   g.status,
+      players: players
+        .filter(p => p.status === g.status)
+        .sort((a, b) => b.lootPerRaid - a.lootPerRaid || a.charName.localeCompare(b.charName)),
+    }))
+    .filter(g => g.players.length > 0);
 
   return (
     <div className="loot-history-page">
@@ -135,40 +145,42 @@ export default function LootHistory() {
             </tr>
           </thead>
           <tbody>
-            {visible.flatMap(p => {
-              const isOpen = expanded.has(p.charId);
-              return [
-                <tr
-                  key={p.charId}
-                  className={`lh-row${isOpen ? ' lh-row-open' : ''}${p.status !== 'Active' ? ' lh-row-inactive' : ''}`}
-                  onClick={() => toggle(p.charId)}
-                >
-                  <td className="lh-cell-char">
-                    <span className={`lh-chevron${isOpen ? ' lh-chevron-open' : ''}`}>▶</span>
-                    <span className="lh-char-name">{p.charName}</span>
-                    <span className="lh-spec text-muted">{p.spec}</span>
-                    {p.status !== 'Active' && (
-                      <span className="badge badge-status lh-status-badge">{p.status}</span>
-                    )}
-                  </td>
-                  {visibleDiffs.map(d => (
-                    <td key={d}><DiffColumn diff={d} counts={p.counts} /></td>
-                  ))}
-                  <td className="lh-col-num">{p.raidsAttended}</td>
-                  <td className="lh-col-num"><strong>{p.lootPerRaid.toFixed(2)}</strong></td>
-                </tr>,
-                isOpen && (
-                  <tr key={`${p.charId}-detail`} className="lh-detail-row">
-                    <td colSpan={colSpan} style={{ padding: 0 }}>
-                      <PlayerLootDetail loot={p.loot} />
-                    </td>
-                  </tr>
-                ),
-              ].filter(Boolean);
-            })}
-            {visible.length === 0 && (
+            {groups.length === 0 && (
               <tr><td colSpan={colSpan} className="empty" style={{ textAlign: 'center', padding: 24 }}>No loot recorded this season.</td></tr>
             )}
+            {groups.flatMap(group => [
+              <tr key={`group-${group.label}`} className="lh-group-header-row">
+                <td colSpan={colSpan} className="lh-group-header">{group.label}</td>
+              </tr>,
+              ...group.players.flatMap(p => {
+                const isOpen = expanded.has(p.charId);
+                return [
+                  <tr
+                    key={p.charId}
+                    className={`lh-row${isOpen ? ' lh-row-open' : ''}${p.status !== 'Active' ? ' lh-row-inactive' : ''}`}
+                    onClick={() => toggle(p.charId)}
+                  >
+                    <td className="lh-cell-char">
+                      <span className={`lh-chevron${isOpen ? ' lh-chevron-open' : ''}`}>▶</span>
+                      <span className="lh-char-name">{p.charName}</span>
+                      <span className="lh-spec text-muted">{p.spec}</span>
+                    </td>
+                    {visibleDiffs.map(d => (
+                      <td key={d}><DiffColumn diff={d} counts={p.counts} /></td>
+                    ))}
+                    <td className="lh-col-num">{p.raidsAttended}</td>
+                    <td className="lh-col-num"><strong>{p.lootPerRaid.toFixed(2)}</strong></td>
+                  </tr>,
+                  isOpen && (
+                    <tr key={`${p.charId}-detail`} className="lh-detail-row">
+                      <td colSpan={colSpan} style={{ padding: 0 }}>
+                        <PlayerLootDetail loot={p.loot} />
+                      </td>
+                    </tr>
+                  ),
+                ].filter(Boolean);
+              }),
+            ])}
           </tbody>
         </table>
       </div>
