@@ -1892,7 +1892,7 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 }
 .lh-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .lh-table tr:last-child > td { border-bottom: none; }
-.lh-col-num { text-align: right; }
+.lh-col-num { text-align: right; white-space: nowrap; }
 
 .lh-row { cursor: pointer; transition: background 0.1s; }
 .lh-row:hover td { background: var(--surface2); }
