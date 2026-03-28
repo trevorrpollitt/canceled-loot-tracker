@@ -10,7 +10,7 @@ import {
   getRoster, getRclcResponseMap,
   getLootLog, appendLootEntries,
 } from '../../../lib/sheets.js';
-import { parseRclcCsv, buildLootEntries, buildExistingKeys } from '../../../lib/rclc.js';
+import { parseRclcCsv, buildLootEntries, buildExistingKeys, isRecipeItem } from '../../../lib/rclc.js';
 
 const router = new Hono();
 router.use('*', requireAuth);
