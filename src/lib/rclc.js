@@ -129,6 +129,20 @@ function stripBrackets(name) {
   return name.replace(/^\[|\]$/g, '').trim();
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const RECIPE_PREFIX_RE = /^(Recipe|Pattern|Plans|Formula|Schematic|Technique|Design):/i;
+
+/**
+ * Returns true if the item name is a crafting recipe and should not count
+ * toward loot totals (stored as Tertiary regardless of RCLC response).
+ * @param {string} itemName
+ * @returns {boolean}
+ */
+export function isRecipeItem(itemName) {
+  return RECIPE_PREFIX_RE.test(itemName);
+}
+
 // ── Entry builder ─────────────────────────────────────────────────────────────
 
 /**
@@ -193,6 +207,9 @@ export function buildLootEntries(rows, roster, responseMap, existingKeys) {
     } else {
       warnings.push(`Unknown response "${responseLabel}" for ${charName} / ${itemName} — defaulted to Non-BIS`);
     }
+
+    // Crafting recipes are never counted in loot totals regardless of RCLC response.
+    if (isRecipeItem(itemName)) upgradeType = 'Tertiary';
 
     // Look up Discord user ID and stable charId from roster (server-aware, best-effort).
     // 1. If server present in RCLC and a roster entry has that server set → name+server match.
