@@ -100,7 +100,7 @@ export default function LootHistory() {
               <th>BIS</th>
               <th>Non-BIS</th>
               <th className="lh-col-num">Raids</th>
-              <th className="lh-col-num">Loot/Raid</th>
+              <th className="lh-col-num" title="Weighted loot per raid attended&#10;= (BIS-M + BIS-H×0.2 + (NonBIS-M + NonBIS-H×0.2)×0.333) ÷ raids">Loot/Raid ⓘ</th>
             </tr>
           </thead>
           <tbody>
