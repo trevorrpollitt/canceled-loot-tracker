@@ -39,7 +39,11 @@ router.get('/history', async (c) => {
     getLootLog(teamSheetId),
   ]);
 
-  const seasonStart = globalConfig.season_start ?? '';
+  // season_start may come back as a Sheets serial number — normalise to ISO date string.
+  const rawSeason   = globalConfig.season_start ?? '';
+  const seasonStart = typeof rawSeason === 'number'
+    ? new Date((rawSeason - 25569) * 86400 * 1000).toISOString().slice(0, 10)
+    : String(rawSeason);
 
   // Lookup maps for joining loot → roster
   const charById   = new Map(roster.map(r => [r.charId,                    r]));
