@@ -294,12 +294,19 @@ export async function clearRange(sheetId, range) {
  * Sheets serial epoch: Dec 30 1899 (with the Lotus 1-2-3 leap-year bug that
  * treats 1900 as a leap year, hence the 25569-day JS-epoch offset).
  */
+// Matches the "20DD-YYYY-MM" malformed pattern, e.g. "2017-2026-03"
+const MALFORMED_DATE_RE = /^(20\d{2})-(20\d{2})-(\d{2})$/;
+
 function normalizeSheetDate(val) {
   if (typeof val === 'number') {
     const ms = (val - 25569) * 86400 * 1000;
     return new Date(ms).toISOString().slice(0, 10);
   }
-  return String(val ?? '');
+  const s = String(val ?? '');
+  // Auto-correct "20DD-YYYY-MM" → "YYYY-MM-DD"
+  const m = s.match(MALFORMED_DATE_RE);
+  if (m) return `${m[2]}-${m[3]}-${m[1].slice(2)}`;
+  return s;
 }
 
 // ── Tab helpers ───────────────────────────────────────────────────────────────
