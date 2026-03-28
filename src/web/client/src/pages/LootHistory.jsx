@@ -62,10 +62,9 @@ export default function LootHistory() {
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
-  const [expanded,     setExpanded]     = useState(new Set());
-  const [showInactive, setShowInactive] = useState(false);
-  const [showBench,    setShowBench]    = useState(true);
-  const [showDiff,     setShowDiff]     = useState({ Mythic: true, Heroic: true, Normal: true });
+  const [expanded,       setExpanded]       = useState(new Set());
+  const [expandedGroups, setExpandedGroups] = useState({ Active: true, Bench: false, Inactive: false });
+  const [showDiff,       setShowDiff]       = useState({ Mythic: true, Heroic: true, Normal: true });
 
   useEffect(() => {
     fetch(apiPath('/api/loot/history'), { credentials: 'include' })
@@ -77,26 +76,18 @@ export default function LootHistory() {
   if (loading) return <div className="loading">Loading loot history…</div>;
   if (error)   return <div className="error">Failed to load loot history.</div>;
 
-  const toggle = (charId) => setExpanded(prev => {
-    const next = new Set(prev);
-    next.has(charId) ? next.delete(charId) : next.add(charId);
-    return next;
+  const toggle      = (charId) => setExpanded(prev => {
+    const next = new Set(prev); next.has(charId) ? next.delete(charId) : next.add(charId); return next;
   });
+  const toggleGroup = (label)  => setExpandedGroups(prev => ({ ...prev, [label]: !prev[label] }));
 
   const { players } = data;
 
-  const STATUS_GROUPS = [
-    { status: 'Active',   show: true        },
-    { status: 'Bench',    show: showBench   },
-    { status: 'Inactive', show: showInactive },
-  ];
-
-  const groups = STATUS_GROUPS
-    .filter(g => g.show)
-    .map(g => ({
-      label:   g.status,
+  const groups = ['Active', 'Bench', 'Inactive']
+    .map(status => ({
+      label:   status,
       players: players
-        .filter(p => p.status === g.status)
+        .filter(p => p.status === status)
         .sort((a, b) => b.lootPerRaid - a.lootPerRaid || a.charName.localeCompare(b.charName)),
     }))
     .filter(g => g.players.length > 0);
@@ -105,14 +96,6 @@ export default function LootHistory() {
     <div className="loot-history-page">
       <div className="page-header">
         <h2 className="page-title">Loot History</h2>
-        <label className="lh-filter-check">
-          <input type="checkbox" checked={showBench} onChange={e => setShowBench(e.target.checked)} />
-          Bench
-        </label>
-        <label className="lh-filter-check">
-          <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
-          Inactive
-        </label>
         <span className="lh-filter-divider" />
         {DIFFICULTIES.map(d => (
           <label key={d} className={`lh-filter-check lh-filter-diff lh-col-${d.toLowerCase()}`}>
@@ -148,11 +131,17 @@ export default function LootHistory() {
             {groups.length === 0 && (
               <tr><td colSpan={colSpan} className="empty" style={{ textAlign: 'center', padding: 24 }}>No loot recorded this season.</td></tr>
             )}
-            {groups.flatMap(group => [
-              <tr key={`group-${group.label}`} className="lh-group-header-row">
-                <td colSpan={colSpan} className="lh-group-header">{group.label}</td>
+            {groups.flatMap(group => {
+              const groupOpen = expandedGroups[group.label] ?? false;
+              return [
+              <tr key={`group-${group.label}`} className="lh-group-header-row" onClick={() => toggleGroup(group.label)}>
+                <td colSpan={colSpan} className="lh-group-header">
+                  <span className={`lh-chevron${groupOpen ? ' lh-chevron-open' : ''}`}>▶</span>
+                  {group.label}
+                  <span className="lh-group-count">{group.players.length}</span>
+                </td>
               </tr>,
-              ...group.players.flatMap(p => {
+              ...(!groupOpen ? [] : group.players.flatMap(p => {
                 const isOpen = expanded.has(p.charId);
                 return [
                   <tr
@@ -179,8 +168,9 @@ export default function LootHistory() {
                     </tr>
                   ),
                 ].filter(Boolean);
-              }),
-            ])}
+              })),
+            ];})}
+
           </tbody>
         </table>
       </div>
