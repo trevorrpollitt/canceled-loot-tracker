@@ -85,15 +85,12 @@ export default function LootHistory() {
     return next;
   });
 
-  const { players, seasonStart } = data;
+  const { players } = data;
 
   return (
     <div className="loot-history-page">
       <div className="page-header">
         <h2 className="page-title">Loot History</h2>
-        {seasonStart && (
-          <span className="page-subtitle text-muted">Season since {seasonStart}</span>
-        )}
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>

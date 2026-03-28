@@ -11,7 +11,7 @@ import {
   primeTeamCache,
   getRoster, getRclcResponseMap,
   getLootLog, appendLootEntries,
-  getGlobalConfig,
+
 } from '../../../lib/sheets.js';
 import { parseRclcCsv, buildLootEntries, buildExistingKeys, isRecipeItem } from '../../../lib/rclc.js';
 
@@ -30,31 +30,19 @@ router.get('/history', async (c) => {
 
   const { teamSheetId } = c.get('session').user;
 
-  const [globalConfig] = await Promise.all([
-    getGlobalConfig(),
-    primeTeamCache(teamSheetId, ['roster', 'lootLog']),
-  ]);
+  await primeTeamCache(teamSheetId, ['roster', 'lootLog']);
 
   const [roster, lootLog] = await Promise.all([
     getRoster(teamSheetId),
     getLootLog(teamSheetId),
   ]);
 
-  // season_start may come back as a Sheets serial number — normalise to ISO date string.
-  const rawSeason   = globalConfig.season_start ?? '';
-  const seasonStart = typeof rawSeason === 'number'
-    ? new Date((rawSeason - 25569) * 86400 * 1000).toISOString().slice(0, 10)
-    : String(rawSeason);
-
   // Lookup maps for joining loot → roster
   const charById   = new Map(roster.map(r => [r.charId,                    r]));
   const charByName = new Map(roster.map(r => [r.charName.toLowerCase(),    r]));
 
-  // Filter to current season, Heroic and Mythic only
-  const entries = lootLog.filter(e =>
-    TRACKED_DIFF.has(e.difficulty) &&
-    (!seasonStart || e.date >= seasonStart)
-  );
+  // Heroic and Mythic only — loot data is expected to be wiped between seasons
+  const entries = lootLog.filter(e => TRACKED_DIFF.has(e.difficulty));
 
   // Group by character (charId preferred, charName fallback for old rows)
   const grouped = new Map(); // charId → { char, entries[] }
@@ -99,7 +87,7 @@ router.get('/history', async (c) => {
   // Primary sort: counted loot desc. Secondary: charName alpha.
   players.sort((a, b) => b.total - a.total || a.charName.localeCompare(b.charName));
 
-  return c.json({ players, seasonStart });
+  return c.json({ players });
 });
 
 // ── POST /import ──────────────────────────────────────────────────────────────
