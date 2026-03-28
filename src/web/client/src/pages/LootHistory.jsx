@@ -2,27 +2,23 @@ import { useState, useEffect, Fragment } from 'react';
 import ItemLink from '../components/ItemLink.jsx';
 import { apiPath } from '../lib/api.js';
 
-const DIFFICULTY_ORDER = ['Mythic', 'Heroic'];
+const DIFFICULTIES = ['Mythic', 'Heroic', 'Normal'];
 
 const UPGRADE_BADGE = {
   'BIS':     { label: 'BIS',     cls: 'badge-bis'    },
   'Non-BIS': { label: 'Non-BIS', cls: 'badge-nonbis' },
 };
 
-// ── Difficulty breakdown cell ─────────────────────────────────────────────────
+// ── BIS / Non-BIS breakdown within one difficulty column ──────────────────────
 
-function DiffCounts({ counts }) {
-  const parts = DIFFICULTY_ORDER
-    .map(d => ({ d, n: counts[d] ?? 0 }))
-    .filter(({ n }) => n > 0);
-  if (!parts.length) return <span className="text-muted">—</span>;
+function DiffColumn({ diff, counts }) {
+  const bis    = counts.BIS?.[diff]       ?? 0;
+  const nonBis = counts['Non-BIS']?.[diff] ?? 0;
+  if (!bis && !nonBis) return <span className="text-muted">—</span>;
   return (
-    <span className="lh-diff-counts">
-      {parts.map(({ d, n }) => (
-        <span key={d} className={`lh-diff lh-diff-${d.toLowerCase()}`}>
-          {n}{d[0]}
-        </span>
-      ))}
+    <span className="lh-diff-col">
+      {bis    > 0 && <span className="lh-diff-tag lh-diff-bis">{bis} BIS</span>}
+      {nonBis > 0 && <span className="lh-diff-tag lh-diff-nonbis">{nonBis} Non-BIS</span>}
     </span>
   );
 }
@@ -111,17 +107,19 @@ export default function LootHistory() {
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <table className="lh-table">
           <colgroup>
-            <col style={{ width: '38%' }} />
+            <col style={{ width: '26%' }} />
             <col style={{ width: '22%' }} />
             <col style={{ width: '22%' }} />
-            <col style={{ width: '9%' }} />
-            <col style={{ width: '9%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '6%' }} />
+            <col style={{ width: '6%' }} />
           </colgroup>
           <thead>
             <tr>
               <th>Character</th>
-              <th>BIS</th>
-              <th>Non-BIS</th>
+              <th className="lh-col-diff lh-col-mythic">Mythic</th>
+              <th className="lh-col-diff lh-col-heroic">Heroic</th>
+              <th className="lh-col-diff lh-col-normal">Normal</th>
               <th className="lh-col-num">Raids</th>
               <th className="lh-col-num" title="Weighted loot per raid attended&#10;= (BIS-M + BIS-H×0.2 + (NonBIS-M + NonBIS-H×0.2)×0.333) ÷ raids">Loot/Raid ⓘ</th>
             </tr>
@@ -143,14 +141,15 @@ export default function LootHistory() {
                       <span className="badge badge-status lh-status-badge">{p.status}</span>
                     )}
                   </td>
-                  <td><DiffCounts counts={p.counts.BIS} /></td>
-                  <td><DiffCounts counts={p.counts['Non-BIS']} /></td>
+                  {DIFFICULTIES.map(d => (
+                    <td key={d}><DiffColumn diff={d} counts={p.counts} /></td>
+                  ))}
                   <td className="lh-col-num">{p.raidsAttended}</td>
                   <td className="lh-col-num"><strong>{p.lootPerRaid.toFixed(2)}</strong></td>
                 </tr>,
                 isOpen && (
                   <tr key={`${p.charId}-detail`} className="lh-detail-row">
-                    <td colSpan={5} style={{ padding: 0 }}>
+                    <td colSpan={6} style={{ padding: 0 }}>
                       <PlayerLootDetail loot={p.loot} />
                     </td>
                   </tr>
@@ -158,7 +157,7 @@ export default function LootHistory() {
               ].filter(Boolean);
             })}
             {visible.length === 0 && (
-              <tr><td colSpan={5} className="empty" style={{ textAlign: 'center', padding: 24 }}>No loot recorded this season.</td></tr>
+              <tr><td colSpan={6} className="empty" style={{ textAlign: 'center', padding: 24 }}>No loot recorded this season.</td></tr>
             )}
           </tbody>
         </table>

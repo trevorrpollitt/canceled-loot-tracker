@@ -1904,8 +1904,13 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .lh-spec { font-size: 0.8rem; }
 .lh-status-badge { font-size: 10px; }
 
-.lh-diff-counts { display: flex; gap: 4px; }
-.lh-diff { font-size: 12px; font-weight: 600; padding: 1px 5px; border-radius: 3px; }
+.lh-diff-col { display: flex; flex-wrap: wrap; gap: 4px; }
+.lh-diff-tag { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 3px; white-space: nowrap; }
+.lh-col-mythic { color: #e06060; }
+.lh-col-heroic { color: #e0b840; }
+.lh-col-normal { color: #80c880; }
+.lh-diff-bis    { background: rgba(0,200,100,0.15);  color: #4ecb82; }
+.lh-diff-nonbis { background: rgba(120,120,180,0.15); color: #9090cc; }
 .lh-diff-mythic  { background: rgba(204,16,16,0.2);  color: #e06060; }
 .lh-diff-heroic  { background: rgba(255,180,0,0.15); color: #e0b840; }
 .lh-diff-normal  { background: rgba(100,180,100,0.15); color: #80c880; }

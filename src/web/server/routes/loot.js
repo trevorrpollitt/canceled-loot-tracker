@@ -15,7 +15,7 @@ import {
 import { parseRclcCsv, buildLootEntries, buildExistingKeys, isRecipeItem } from '../../../lib/rclc.js';
 
 const COUNTED        = new Set(['BIS', 'Non-BIS']);
-const TRACKED_DIFF   = new Set(['Heroic', 'Mythic']);
+const TRACKED_DIFF   = new Set(['Normal', 'Heroic', 'Mythic']);
 const HEROIC_WEIGHT  = 0.2;
 const NON_BIS_WEIGHT = 0.333;
 
