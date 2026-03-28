@@ -81,7 +81,7 @@ export default function LootHistory() {
   });
   const toggleGroup = (label)  => setExpandedGroups(prev => ({ ...prev, [label]: !prev[label] }));
 
-  const { players } = data;
+  const { players, heroicWeight = 0.2, normalWeight = 0, nonBisWeight = 0.333 } = data;
 
   const groups = ['Active', 'Bench', 'Inactive']
     .map(status => ({
@@ -124,7 +124,7 @@ export default function LootHistory() {
                 <th key={d} className={`lh-col-diff lh-col-${d.toLowerCase()}`}>{d}</th>
               ))}
               <th className="lh-col-num">Raids</th>
-              <th className="lh-col-num" title="Weighted loot per raid attended&#10;= (BIS-M + BIS-H×0.2 + (NonBIS-M + NonBIS-H×0.2)×0.333) ÷ raids">Loot/Raid ⓘ</th>
+              <th className="lh-col-num" title={`Weighted loot per raid attended\n= (BIS-M + BIS-H×${heroicWeight}${normalWeight ? ` + BIS-N×${normalWeight}` : ''} + (NonBIS-M + NonBIS-H×${heroicWeight}${normalWeight ? ` + NonBIS-N×${normalWeight}` : ''})×${nonBisWeight}) ÷ raids`}>Loot/Raid ⓘ</th>
             </tr>
           </thead>
           <tbody>

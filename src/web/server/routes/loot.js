@@ -11,13 +11,12 @@ import {
   primeTeamCache,
   getRoster, getRclcResponseMap,
   getLootLog, appendLootEntries, getRaids,
+  getConfig,
 } from '../../../lib/sheets.js';
 import { parseRclcCsv, buildLootEntries, buildExistingKeys, isRecipeItem } from '../../../lib/rclc.js';
 
-const COUNTED        = new Set(['BIS', 'Non-BIS']);
-const TRACKED_DIFF   = new Set(['Normal', 'Heroic', 'Mythic']);
-const HEROIC_WEIGHT  = 0.2;
-const NON_BIS_WEIGHT = 0.333;
+const COUNTED      = new Set(['BIS', 'Non-BIS']);
+const TRACKED_DIFF = new Set(['Normal', 'Heroic', 'Mythic']);
 
 const router = new Hono();
 router.use('*', requireAuth);
@@ -31,13 +30,18 @@ router.get('/history', async (c) => {
 
   const { teamSheetId } = c.get('session').user;
 
-  await primeTeamCache(teamSheetId, ['roster', 'lootLog', 'raids']);
+  await primeTeamCache(teamSheetId, ['roster', 'lootLog', 'raids', 'config']);
 
-  const [roster, lootLog, raids] = await Promise.all([
+  const [roster, lootLog, raids, config] = await Promise.all([
     getRoster(teamSheetId),
     getLootLog(teamSheetId),
     getRaids(teamSheetId),
+    getConfig(teamSheetId),
   ]);
+
+  const heroicWeight = parseFloat(config.council_heroic_weight ?? '0.2');
+  const normalWeight = parseFloat(config.council_normal_weight ?? '0');
+  const nonBisWeight = parseFloat(config.council_nonbis_weight ?? '0.333');
 
   // Attendance count by Discord user ID
   const raidsByOwner = {};
@@ -47,7 +51,7 @@ router.get('/history', async (c) => {
   const charById   = new Map(roster.map(r => [r.charId,                    r]));
   const charByName = new Map(roster.map(r => [r.charName.toLowerCase(),    r]));
 
-  // Heroic and Mythic only — loot data is expected to be wiped between seasons
+  // Normal/Heroic/Mythic only — loot data is expected to be wiped between seasons
   const entries = lootLog.filter(e => TRACKED_DIFF.has(e.difficulty));
 
   // Seed every roster member so characters with no loot still appear
@@ -76,12 +80,14 @@ router.get('/history', async (c) => {
     const raidsAttended = raidsByOwner[char.ownerId] ?? 0;
 
     // Same weighted formula as the council loot-density multiplier
-    const bisM      = counts.BIS['Mythic']      ?? 0;
-    const bisH      = counts.BIS['Heroic']      ?? 0;
-    const nonBisM   = counts['Non-BIS']['Mythic'] ?? 0;
-    const nonBisH   = counts['Non-BIS']['Heroic'] ?? 0;
-    const weighted  = bisM + bisH * HEROIC_WEIGHT
-      + (nonBisM + nonBisH * HEROIC_WEIGHT) * NON_BIS_WEIGHT;
+    const bisM    = counts.BIS['Mythic']        ?? 0;
+    const bisH    = counts.BIS['Heroic']        ?? 0;
+    const bisN    = counts.BIS['Normal']        ?? 0;
+    const nonBisM = counts['Non-BIS']['Mythic'] ?? 0;
+    const nonBisH = counts['Non-BIS']['Heroic'] ?? 0;
+    const nonBisN = counts['Non-BIS']['Normal'] ?? 0;
+    const weighted = bisM + bisH * heroicWeight + bisN * normalWeight
+      + (nonBisM + nonBisH * heroicWeight + nonBisN * normalWeight) * nonBisWeight;
     const lootPerRaid = weighted / Math.max(raidsAttended, 1);
 
     // Newest first for the detail panel; exclude Tertiary
@@ -105,7 +111,7 @@ router.get('/history', async (c) => {
   // Primary sort: lootPerRaid desc. Secondary: charName alpha.
   players.sort((a, b) => b.lootPerRaid - a.lootPerRaid || a.charName.localeCompare(b.charName));
 
-  return c.json({ players });
+  return c.json({ players, heroicWeight, normalWeight, nonBisWeight });
 });
 
 // ── POST /import ──────────────────────────────────────────────────────────────

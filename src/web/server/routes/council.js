@@ -226,7 +226,8 @@ router.get('/items', async (c) => {
       currentDifficulty:        config.current_difficulty          ?? 'Mythic',
       curioItemId:              config.curio_item_id               ?? '',
       tierDistributionPriority: config.tier_distribution_priority  || 'bonus-first',
-      heroicWeight:             parseFloat(config.council_heroic_weight ?? '0.2'),
+      heroicWeight:             parseFloat(config.council_heroic_weight  ?? '0.2'),
+      normalWeight:             parseFloat(config.council_normal_weight  ?? '0'),
       nonBisWeight:             parseFloat(config.council_nonbis_weight ?? '0.333'),
     });
   } catch (err) {
@@ -286,9 +287,9 @@ router.get('/candidates', async (c) => {
       if (!r.ownerId) continue;
       const charKey = r.charId || r.charName.toLowerCase();
       const s = stats[charKey] ?? {};
-      if (!acctStats[r.ownerId]) acctStats[r.ownerId] = { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
+      if (!acctStats[r.ownerId]) acctStats[r.ownerId] = { bisN: 0, bisH: 0, bisM: 0, nonBisN: 0, nonBisH: 0, nonBisM: 0 };
       const a = acctStats[r.ownerId];
-      a.bisH += s.bisH ?? 0; a.bisM += s.bisM ?? 0; a.nonBisH += s.nonBisH ?? 0; a.nonBisM += s.nonBisM ?? 0;
+      a.bisN += s.bisN ?? 0; a.bisH += s.bisH ?? 0; a.bisM += s.bisM ?? 0; a.nonBisN += s.nonBisN ?? 0; a.nonBisH += s.nonBisH ?? 0; a.nonBisM += s.nonBisM ?? 0;
     }
 
     const approvedBis = {};
@@ -319,8 +320,8 @@ router.get('/candidates', async (c) => {
       const { overallBisMatch, raidBisMatch, hasRaidBis, overallMatchSlots, raidMatchSlots } =
         computeSpecBisMatch(charKey, charSpec.primary, item, itemSlot, approvedBis, defaultBisMap);
 
-      const s    = stats[charKey] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
-      const acct = acctStats[char.ownerId] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
+      const s    = stats[charKey] ?? { bisN: 0, bisH: 0, bisM: 0, nonBisN: 0, nonBisH: 0, nonBisM: 0 };
+      const acct = acctStats[char.ownerId] ?? { bisN: 0, bisH: 0, bisM: 0, nonBisN: 0, nonBisH: 0, nonBisM: 0 };
 
       // Per-match-slot worn tracks: minimum overallBISTrack / raidBISTrack across the specific
       // numbered slot(s) where the BIS match was found. Unlike the aggregate (MAX across all paired
@@ -345,8 +346,8 @@ router.get('/candidates', async (c) => {
 
       candidates.push({
         charName: char.charName, class: char.class, spec: char.spec, role: char.role, status: char.status,
-        bisH: s.bisH, bisM: s.bisM, nonBisH: s.nonBisH, nonBisM: s.nonBisM,
-        acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
+        bisN: s.bisN, bisH: s.bisH, bisM: s.bisM, nonBisN: s.nonBisN, nonBisH: s.nonBisH, nonBisM: s.nonBisM,
+        acctBisN: acct.bisN, acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisN: acct.nonBisN, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
         raidsAttended: raidsByOwner[char.ownerId] ?? 0,
         overallBisMatch, raidBisMatch, hasRaidBis,
         wornBis: { ...getWornTracksForSlot(wornBisMap, char.charId, char.spec, itemSlot), ovMatchWornTrack, raidMatchWornTrack },
@@ -407,9 +408,9 @@ router.get('/curio-candidates', async (c) => {
       if (!r.ownerId) continue;
       const charKey = r.charId || r.charName.toLowerCase();
       const s = stats[charKey] ?? {};
-      if (!acctStats[r.ownerId]) acctStats[r.ownerId] = { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
+      if (!acctStats[r.ownerId]) acctStats[r.ownerId] = { bisN: 0, bisH: 0, bisM: 0, nonBisN: 0, nonBisH: 0, nonBisM: 0 };
       const a = acctStats[r.ownerId];
-      a.bisH += s.bisH ?? 0; a.bisM += s.bisM ?? 0; a.nonBisH += s.nonBisH ?? 0; a.nonBisM += s.nonBisM ?? 0;
+      a.bisN += s.bisN ?? 0; a.bisH += s.bisH ?? 0; a.bisM += s.bisM ?? 0; a.nonBisN += s.nonBisN ?? 0; a.nonBisH += s.nonBisH ?? 0; a.nonBisM += s.nonBisM ?? 0;
     }
 
     const approvedBis = {};
@@ -442,7 +443,7 @@ router.get('/curio-candidates', async (c) => {
         if (resolvedRaidBis === '<Tier>') tierSlotsWanted.push(slot);
       }
       const s    = stats[char.charId || char.charName.toLowerCase()]    ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
-      const acct = acctStats[char.ownerId] ?? { bisH: 0, bisM: 0, nonBisH: 0, nonBisM: 0 };
+      const acct = acctStats[char.ownerId] ?? { bisN: 0, bisH: 0, bisM: 0, nonBisN: 0, nonBisH: 0, nonBisM: 0 };
 
       // BIS match: curio can fill any tier slot, so check across all tier slots
       const overallBisMatch = overallTierWanted;
@@ -451,8 +452,8 @@ router.get('/curio-candidates', async (c) => {
       candidates.push({
         charName: char.charName, class: char.class, spec: char.spec, status: char.status, tierSlotsWanted,
         tierSlots: tierSnapshotMap.get(char.charId) ?? {},
-        bisH: s.bisH, bisM: s.bisM, nonBisH: s.nonBisH, nonBisM: s.nonBisM,
-        acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
+        bisN: s.bisN, bisH: s.bisH, bisM: s.bisM, nonBisN: s.nonBisN, nonBisH: s.nonBisH, nonBisM: s.nonBisM,
+        acctBisN: acct.bisN, acctBisH: acct.bisH, acctBisM: acct.bisM, acctNonBisN: acct.nonBisN, acctNonBisH: acct.nonBisH, acctNonBisM: acct.nonBisM,
         raidsAttended: raidsByOwner[char.ownerId] ?? 0,
         overallBisMatch, raidBisMatch,
       });

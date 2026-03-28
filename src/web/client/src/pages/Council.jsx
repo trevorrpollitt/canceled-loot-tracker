@@ -42,7 +42,7 @@ function getRelevantTrack(c) {
   return worn.otherTrack ?? '';
 }
 
-function scoreCandidates(candidates, selectedDifficulty, tierDistPriority, heroicWeight, nonBisWeight, itemSlot) {
+function scoreCandidates(candidates, selectedDifficulty, tierDistPriority, heroicWeight, normalWeight, nonBisWeight, itemSlot) {
   const maxAttendance  = Math.max(...candidates.map(c => c.raidsAttended ?? 0), 1);
   const itemTrackRank  = TRACK_RANK[DIFFICULTY_TO_TRACK[selectedDifficulty] ?? 'Hero'];
   const tierScores     = TIER_DIST_SCORES[tierDistPriority] ?? TIER_DIST_SCORES['bonus-first'];
@@ -83,7 +83,8 @@ function scoreCandidates(candidates, selectedDifficulty, tierDistPriority, heroi
     const A           = 0.5 + 0.5 * ((c.raidsAttended ?? 0) / maxAttendance);
     const weightedLoot = (c.acctBisM ?? 0)
       + (c.acctBisH    ?? 0) * heroicWeight
-      + ((c.acctNonBisM ?? 0) + (c.acctNonBisH ?? 0) * heroicWeight) * nonBisWeight;
+      + (c.acctBisN    ?? 0) * normalWeight
+      + ((c.acctNonBisM ?? 0) + (c.acctNonBisH ?? 0) * heroicWeight + (c.acctNonBisN ?? 0) * normalWeight) * nonBisWeight;
     const lootPerRaid = weightedLoot / Math.max(c.raidsAttended ?? 1, 1);
     const L           = 1 / (1 + lootPerRaid);
 
@@ -119,7 +120,7 @@ function scoreCandidates(candidates, selectedDifficulty, tierDistPriority, heroi
   }).sort((a, b) => b._score - a._score);
 }
 
-function scoreCurioCandidates(candidates, tierDistPriority, heroicWeight, nonBisWeight) {
+function scoreCurioCandidates(candidates, tierDistPriority, heroicWeight, normalWeight, nonBisWeight) {
   const maxAttendance = Math.max(...candidates.map(c => c.raidsAttended ?? 0), 1);
   const tierScores    = TIER_DIST_SCORES[tierDistPriority] ?? TIER_DIST_SCORES['bonus-first'];
 
@@ -137,7 +138,8 @@ function scoreCurioCandidates(candidates, tierDistPriority, heroicWeight, nonBis
     const A           = 0.5 + 0.5 * ((c.raidsAttended ?? 0) / maxAttendance);
     const weightedLoot = (c.acctBisM ?? 0)
       + (c.acctBisH    ?? 0) * heroicWeight
-      + ((c.acctNonBisM ?? 0) + (c.acctNonBisH ?? 0) * heroicWeight) * nonBisWeight;
+      + (c.acctBisN    ?? 0) * normalWeight
+      + ((c.acctNonBisM ?? 0) + (c.acctNonBisH ?? 0) * heroicWeight + (c.acctNonBisN ?? 0) * normalWeight) * nonBisWeight;
     const lootPerRaid = weightedLoot / Math.max(c.raidsAttended ?? 1, 1);
     const L           = 1 / (1 + lootPerRaid);
 
@@ -306,7 +308,7 @@ function CurioCandidateRow({ c, tags, isOfficer }) {
   );
 }
 
-function CurioCandidateTable({ curioItemId, tierDistributionPriority, heroicWeight, nonBisWeight }) {
+function CurioCandidateTable({ curioItemId, tierDistributionPriority, heroicWeight, normalWeight, nonBisWeight }) {
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
@@ -329,7 +331,7 @@ function CurioCandidateTable({ curioItemId, tierDistributionPriority, heroicWeig
   if (error)   return <div className="error">{error}</div>;
   if (!data)   return null;
 
-  const scored = scoreCurioCandidates(data.candidates, tierDistributionPriority, heroicWeight, nonBisWeight);
+  const scored = scoreCurioCandidates(data.candidates, tierDistributionPriority, heroicWeight, normalWeight, nonBisWeight);
   const candidates = scored;
 
   return (
@@ -561,7 +563,7 @@ function CandidateRow({ c, isTierToken, itemSlot, tags, isOfficer }) {
   );
 }
 
-function CandidateTable({ itemId, showAll, onToggle, selectedDifficulty, tierDistributionPriority, heroicWeight, nonBisWeight }) {
+function CandidateTable({ itemId, showAll, onToggle, selectedDifficulty, tierDistributionPriority, heroicWeight, normalWeight, nonBisWeight }) {
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
@@ -589,7 +591,7 @@ function CandidateTable({ itemId, showAll, onToggle, selectedDifficulty, tierDis
 
   const { item, candidates } = data;
   const filtered = showAll ? candidates : candidates.filter(c => c.raidBisMatch);
-  const sorted   = scoreCandidates(filtered, selectedDifficulty, tierDistributionPriority, heroicWeight, nonBisWeight, item.slot);
+  const sorted   = scoreCandidates(filtered, selectedDifficulty, tierDistributionPriority, heroicWeight, normalWeight, nonBisWeight, item.slot);
 
   return (
     <div className="council-candidates">
@@ -674,6 +676,7 @@ export default function Council() {
   const [selectedDifficulty,     setSelectedDifficulty]     = useState('Mythic');
   const [tierDistributionPriority, setTierDistributionPriority] = useState('bonus-first');
   const [heroicWeight,           setHeroicWeight]           = useState(0.2);
+  const [normalWeight,           setNormalWeight]           = useState(0);
   const [nonBisWeight,           setNonBisWeight]           = useState(0.333);
   const [loading,                setLoading]                = useState(true);
   const [error,                  setError]                  = useState(null);
@@ -691,6 +694,7 @@ export default function Council() {
         setSelectedDifficulty(d.currentDifficulty || 'Mythic');
         setTierDistributionPriority(d.tierDistributionPriority || 'bonus-first');
         setHeroicWeight(typeof d.heroicWeight === 'number' ? d.heroicWeight : 0.2);
+        setNormalWeight(typeof d.normalWeight === 'number' ? d.normalWeight : 0);
         setNonBisWeight(typeof d.nonBisWeight === 'number' ? d.nonBisWeight : 0.333);
         const inst = d.instances.find(i => i.instance === d.currentInstance) ?? d.instances[0];
         setCurrentInstance(inst?.instance ?? '');
@@ -807,6 +811,7 @@ export default function Council() {
                     selectedDifficulty={selectedDifficulty}
                     tierDistributionPriority={tierDistributionPriority}
                     heroicWeight={heroicWeight}
+                    normalWeight={normalWeight}
                     nonBisWeight={nonBisWeight}
                   />
                 </div>
@@ -824,6 +829,7 @@ export default function Council() {
             curioItemId={curioItemId}
             tierDistributionPriority={tierDistributionPriority}
             heroicWeight={heroicWeight}
+            normalWeight={normalWeight}
             nonBisWeight={nonBisWeight}
           />
         </div>
