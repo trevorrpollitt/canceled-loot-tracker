@@ -94,6 +94,13 @@ export default function LootHistory() {
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <table className="lh-table">
+          <colgroup>
+            <col style={{ width: '38%' }} />
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '9%' }} />
+            <col style={{ width: '9%' }} />
+          </colgroup>
           <thead>
             <tr>
               <th>Character</th>
