@@ -1875,6 +1875,8 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 
 .lh-filter-check { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; user-select: none; }
 .lh-filter-check input { accent-color: var(--accent, #CC1010); cursor: pointer; }
+.lh-filter-divider { width: 1px; background: var(--border); margin: 0 4px; align-self: stretch; }
+.lh-filter-diff { font-weight: 600; }
 
 .lh-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .lh-table th {

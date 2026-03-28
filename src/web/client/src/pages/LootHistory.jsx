@@ -65,6 +65,7 @@ export default function LootHistory() {
   const [expanded,     setExpanded]     = useState(new Set());
   const [showInactive, setShowInactive] = useState(false);
   const [showBench,    setShowBench]    = useState(true);
+  const [showDiff,     setShowDiff]     = useState({ Mythic: true, Heroic: true, Normal: true });
 
   useEffect(() => {
     fetch(apiPath('/api/loot/history'), { credentials: 'include' })
@@ -102,24 +103,33 @@ export default function LootHistory() {
           <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
           Inactive
         </label>
+        <span className="lh-filter-divider" />
+        {DIFFICULTIES.map(d => (
+          <label key={d} className={`lh-filter-check lh-filter-diff lh-col-${d.toLowerCase()}`}>
+            <input type="checkbox" checked={showDiff[d]} onChange={e => setShowDiff(prev => ({ ...prev, [d]: e.target.checked }))} />
+            {d}
+          </label>
+        ))}
       </div>
 
+      {(() => {
+        const visibleDiffs = DIFFICULTIES.filter(d => showDiff[d]);
+        const colSpan = 3 + visibleDiffs.length; // char + visible diffs + raids + loot/raid
+        return (
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <table className="lh-table">
           <colgroup>
-            <col style={{ width: '26%' }} />
-            <col style={{ width: '22%' }} />
-            <col style={{ width: '22%' }} />
-            <col style={{ width: '18%' }} />
+            <col />
+            {visibleDiffs.map(d => <col key={d} />)}
             <col style={{ width: '6%' }} />
             <col style={{ width: '6%' }} />
           </colgroup>
           <thead>
             <tr>
               <th>Character</th>
-              <th className="lh-col-diff lh-col-mythic">Mythic</th>
-              <th className="lh-col-diff lh-col-heroic">Heroic</th>
-              <th className="lh-col-diff lh-col-normal">Normal</th>
+              {visibleDiffs.map(d => (
+                <th key={d} className={`lh-col-diff lh-col-${d.toLowerCase()}`}>{d}</th>
+              ))}
               <th className="lh-col-num">Raids</th>
               <th className="lh-col-num" title="Weighted loot per raid attended&#10;= (BIS-M + BIS-H×0.2 + (NonBIS-M + NonBIS-H×0.2)×0.333) ÷ raids">Loot/Raid ⓘ</th>
             </tr>
@@ -141,7 +151,7 @@ export default function LootHistory() {
                       <span className="badge badge-status lh-status-badge">{p.status}</span>
                     )}
                   </td>
-                  {DIFFICULTIES.map(d => (
+                  {visibleDiffs.map(d => (
                     <td key={d}><DiffColumn diff={d} counts={p.counts} /></td>
                   ))}
                   <td className="lh-col-num">{p.raidsAttended}</td>
@@ -149,7 +159,7 @@ export default function LootHistory() {
                 </tr>,
                 isOpen && (
                   <tr key={`${p.charId}-detail`} className="lh-detail-row">
-                    <td colSpan={6} style={{ padding: 0 }}>
+                    <td colSpan={colSpan} style={{ padding: 0 }}>
                       <PlayerLootDetail loot={p.loot} />
                     </td>
                   </tr>
@@ -157,11 +167,13 @@ export default function LootHistory() {
               ].filter(Boolean);
             })}
             {visible.length === 0 && (
-              <tr><td colSpan={6} className="empty" style={{ textAlign: 'center', padding: 24 }}>No loot recorded this season.</td></tr>
+              <tr><td colSpan={colSpan} className="empty" style={{ textAlign: 'center', padding: 24 }}>No loot recorded this season.</td></tr>
             )}
           </tbody>
         </table>
       </div>
+        );
+      })()}
     </div>
   );
 }
