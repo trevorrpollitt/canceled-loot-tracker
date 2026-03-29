@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import ItemLink from '../components/ItemLink.jsx';
 import { apiPath } from '../lib/api.js';
 
@@ -109,8 +109,7 @@ function SkippedTable({ rows, corrections, onCorrect }) {
   );
 }
 
-function SkippedSection({ skipped }) {
-  const [open,    setOpen]    = useState(false);
+function SkippedSection({ skipped, open, onToggle, sectionRef }) {
   const [openSub, setOpenSub] = useState({});
   const [corrections, setCorrections] = useState({});
   const [saving,  setSaving]  = useState(false);
@@ -147,8 +146,8 @@ function SkippedSection({ skipped }) {
   };
 
   return (
-    <div className="card lh-skipped-card">
-      <div className="lh-skipped-header" onClick={() => setOpen(o => !o)}>
+    <div className="card lh-skipped-card" ref={sectionRef}>
+      <div className="lh-skipped-header" onClick={onToggle}>
         <span className={`lh-chevron${open ? ' lh-chevron-open' : ''}`}>▶</span>
         <span>Skipped / Ignored Rows</span>
         <span className="lh-group-count">{total}</span>
@@ -196,12 +195,17 @@ function SkippedSection({ skipped }) {
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
+// Categories that represent actionable errors (not just informational)
+const ERROR_KEYS = ['noRosterMatch', 'wrongDifficulty'];
+
 export default function LootHistory() {
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
   const [expanded,       setExpanded]       = useState(new Set());
   const [expandedGroups, setExpandedGroups] = useState({ Active: true, Bench: false, Inactive: false });
+  const [skippedOpen, setSkippedOpen] = useState(false);
+  const skippedRef = useRef(null);
   const [showDiff,       setShowDiff]       = useState({ Mythic: true, Heroic: true, Normal: true });
 
   useEffect(() => {
@@ -221,6 +225,14 @@ export default function LootHistory() {
 
   const { players, heroicWeight = 0.2, normalWeight = 0, nonBisWeight = 0.333, skipped = {} } = data;
 
+  const errorCounts = ERROR_KEYS.map(k => ({ key: k, count: skipped[k]?.length ?? 0 })).filter(e => e.count > 0);
+  const totalErrors = errorCounts.reduce((n, e) => n + e.count, 0);
+
+  const handleGoToSkipped = (key) => {
+    setSkippedOpen(true);
+    setTimeout(() => skippedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  };
+
   const groups = ['Active', 'Bench', 'Inactive']
     .map(status => ({
       label:   status,
@@ -232,6 +244,23 @@ export default function LootHistory() {
 
   return (
     <div className="loot-history-page">
+      {totalErrors > 0 && (
+        <div className="lh-error-banner">
+          <span className="lh-error-banner-icon">⚠</span>
+          <span className="lh-error-banner-msg">
+            {totalErrors} loot log {totalErrors === 1 ? 'entry' : 'entries'} could not be processed —
+            {errorCounts.map(({ key, count }, i) => {
+              const label = key === 'noRosterMatch' ? 'no roster match' : 'wrong difficulty';
+              return (
+                <span key={key}>{i > 0 ? ', ' : ' '}<strong>{count}</strong> {label}</span>
+              );
+            })}
+          </span>
+          <button className="lh-error-banner-btn" onClick={() => handleGoToSkipped()}>
+            Review &amp; Fix ↓
+          </button>
+        </div>
+      )}
       <div className="page-header">
         <h2 className="page-title">Loot History</h2>
         <span className="lh-filter-divider" />
@@ -315,7 +344,12 @@ export default function LootHistory() {
         );
       })()}
 
-      <SkippedSection skipped={skipped} />
+      <SkippedSection
+        skipped={skipped}
+        open={skippedOpen}
+        onToggle={() => setSkippedOpen(o => !o)}
+        sectionRef={skippedRef}
+      />
     </div>
   );
 }
