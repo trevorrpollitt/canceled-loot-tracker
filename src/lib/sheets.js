@@ -343,7 +343,7 @@ function parseLootLogRows(rows) {
       itemName:        r[4] ?? '',
       difficulty:      r[5] ?? '',
       recipientId:     r[6] ?? '',
-      recipientChar:   r[7] ?? '',
+      recipientChar:   String(r[7] ?? '').trim(),
       upgradeType:     r[8] ?? '',
       notes:           r[9] ?? '',
       recipientCharId: String(r[10] ?? '').trim(),
