@@ -774,6 +774,53 @@ export async function appendLootEntries(sheetId, entries) {
 }
 
 /**
+ * Backfill missing RecipientId (col G) and RecipientCharId (col K) in the Loot Log
+ * by matching RecipientChar (col H) against the current roster.
+ * Only writes to cells that are currently blank — never overwrites existing values.
+ * Used by the "Reprocess" action on the loot history page after new roster entries
+ * have been added.
+ *
+ * @param {string} sheetId
+ * @returns {{ charIdUpdates: number, ownerIdUpdates: number }}
+ */
+export async function backfillLootEntryIds(sheetId) {
+  log.verbose(`[sheets] backfillLootEntryIds (sheet ${sheetId.slice(-6)})`);
+  const roster = await getRoster(sheetId);
+  const charIdByName  = new Map(roster.map(r => [r.charName.toLowerCase(), r.charId]));
+  const ownerIdByName = new Map(roster.map(r => [r.charName.toLowerCase(), r.ownerId]));
+
+  const rows = await readRange(sheetId, 'Loot Log!A2:K');
+  const charIdUpdates  = [];
+  const ownerIdUpdates = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const r             = rows[i];
+    const id            = String(r[0]  ?? '').trim();
+    const recipientChar = String(r[7]  ?? '').trim(); // col H
+    const existingOwner = String(r[6]  ?? '').trim(); // col G
+    const existingChar  = String(r[10] ?? '').trim(); // col K
+
+    if (!id || !recipientChar) continue;
+    if (existingOwner && existingChar) continue; // already fully populated
+
+    const nameKey = recipientChar.toLowerCase();
+    const charId  = charIdByName.get(nameKey);
+    const ownerId = ownerIdByName.get(nameKey);
+    if (!charId && !ownerId) continue; // still unresolvable
+
+    if (charId  && !existingChar)  charIdUpdates.push({ range: `Loot Log!K${i + 2}`, values: [[charId]]  });
+    if (ownerId && !existingOwner) ownerIdUpdates.push({ range: `Loot Log!G${i + 2}`, values: [[ownerId]] });
+  }
+
+  const updates = [...charIdUpdates, ...ownerIdUpdates];
+  if (updates.length) {
+    await batchWriteRanges(sheetId, updates);
+    cacheInvalidate(sheetId, 'lootLog');
+  }
+  return { charIdUpdates: charIdUpdates.length, ownerIdUpdates: ownerIdUpdates.length };
+}
+
+/**
  * Patch the Difficulty field (col F) for a set of Loot Log entries identified by ID.
  * Used by the loot history page to correct entries that were imported with a missing
  * or unrecognised difficulty value.

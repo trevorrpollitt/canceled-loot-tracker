@@ -10,7 +10,7 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import {
   primeTeamCache,
   getRoster, getRclcResponseMap,
-  getLootLog, appendLootEntries, patchLootEntryDifficulties, getRaids,
+  getLootLog, appendLootEntries, patchLootEntryDifficulties, backfillLootEntryIds, getRaids,
   getConfig,
 } from '../../../lib/sheets.js';
 import { parseRclcCsv, buildLootEntries, buildExistingKeys, isRecipeItem } from '../../../lib/rclc.js';
@@ -132,6 +132,20 @@ router.get('/history', async (c) => {
   players.sort((a, b) => b.lootPerRaid - a.lootPerRaid || a.charName.localeCompare(b.charName));
 
   return c.json({ players, heroicWeight, normalWeight, nonBisWeight, skipped });
+});
+
+// ── POST /reprocess ───────────────────────────────────────────────────────────
+// Re-runs the roster ID backfill over the entire loot log. Call this after adding
+// missing roster entries so that previously-unresolvable rows get their CharId and
+// RecipientId populated without a full sheet migration run.
+
+router.post('/reprocess', async (c) => {
+  if (!c.get('session').user?.isOfficer) {
+    return c.json({ error: 'Officer access required.' }, 403);
+  }
+  const { teamSheetId } = c.get('session').user;
+  const result = await backfillLootEntryIds(teamSheetId);
+  return c.json(result);
 });
 
 // ── PATCH /entries ────────────────────────────────────────────────────────────

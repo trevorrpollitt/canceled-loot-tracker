@@ -1974,3 +1974,11 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .lh-save-corrections-btn:hover:not(:disabled) { background: #aa0d0d; }
 .lh-save-corrections-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .lh-save-err { font-size: 0.75rem; color: #f87171; margin-left: 8px; }
+.lh-reprocess-btn {
+  margin-left: auto; padding: 2px 10px; font-size: 0.76rem; font-weight: 600;
+  background: transparent; color: var(--primary, #CC1010);
+  border: 1px solid var(--primary, #CC1010); border-radius: 4px; cursor: pointer;
+  flex-shrink: 0;
+}
+.lh-reprocess-btn:hover:not(:disabled) { background: rgba(204,16,16,0.12); }
+.lh-reprocess-btn:disabled { opacity: 0.5; cursor: not-allowed; }

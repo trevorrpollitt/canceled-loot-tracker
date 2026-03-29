@@ -110,7 +110,9 @@ function SkippedTable({ rows, corrections, onCorrect }) {
 }
 
 function SkippedSection({ skipped, open, onToggle, sectionRef }) {
-  const [openSub, setOpenSub] = useState({});
+  const [openSub,     setOpenSub]     = useState({});
+  const [reprocessing, setReprocessing] = useState(false);
+  const [reprocessErr, setReprocessErr] = useState(null);
   const [corrections, setCorrections] = useState({});
   const [saving,  setSaving]  = useState(false);
   const [saveErr, setSaveErr] = useState(null);
@@ -169,6 +171,24 @@ function SkippedSection({ skipped, open, onToggle, sectionRef }) {
             if (!rows.length) return null;
             const subOpen = openSub[key] ?? false;
             const isEditable = key === 'wrongDifficulty';
+            const isRosterMatch = key === 'noRosterMatch';
+
+            const handleReprocess = async (e) => {
+              e.stopPropagation();
+              setReprocessing(true);
+              setReprocessErr(null);
+              try {
+                const r = await fetch(apiPath('/api/loot/reprocess'), {
+                  method: 'POST', credentials: 'include',
+                });
+                if (!r.ok) throw new Error((await r.json()).error ?? r.status);
+                window.location.reload();
+              } catch (err) {
+                setReprocessErr(err.message);
+                setReprocessing(false);
+              }
+            };
+
             return (
               <div key={key} className="lh-skip-group">
                 <div className="lh-skip-group-header" onClick={() => setOpenSub(p => ({ ...p, [key]: !p[key] }))}>
@@ -176,6 +196,18 @@ function SkippedSection({ skipped, open, onToggle, sectionRef }) {
                   <strong>{label}</strong>
                   <span className="lh-group-count">{rows.length}</span>
                   <span className="text-muted lh-skip-desc">{desc}</span>
+                  {isRosterMatch && (
+                    <>
+                      <button
+                        className="lh-reprocess-btn"
+                        disabled={reprocessing}
+                        onClick={handleReprocess}
+                      >
+                        {reprocessing ? 'Reprocessing…' : 'Reprocess'}
+                      </button>
+                      {reprocessErr && <span className="lh-save-err">{reprocessErr}</span>}
+                    </>
+                  )}
                 </div>
                 {subOpen && (
                   <SkippedTable
