@@ -60,11 +60,14 @@ function PlayerLootDetail({ loot }) {
 
 const SKIP_SECTIONS = [
   { key: 'noRosterMatch',   label: 'No Roster Match',    desc: 'Pugs, deleted characters, or unresolvable CharId/name.' },
-  { key: 'wrongDifficulty', label: 'Wrong Difficulty',   desc: 'Difficulty not in the tracked set (Normal / Heroic / Mythic).' },
+  { key: 'wrongDifficulty', label: 'Wrong Difficulty',   desc: 'Difficulty not in the tracked set (Normal / Heroic / Mythic). Select the correct value to fix.' },
   { key: 'tertiary',        label: 'Tertiary',           desc: 'Tertiary drops — excluded from loot score but still recorded.' },
 ];
 
-function SkippedTable({ rows }) {
+const DIFF_OPTIONS = ['Normal', 'Heroic', 'Mythic'];
+
+function SkippedTable({ rows, corrections, onCorrect }) {
+  const editable = !!onCorrect;
   return (
     <table className="loot-table lh-detail-table" style={{ marginTop: 8 }}>
       <thead>
@@ -83,7 +86,20 @@ function SkippedTable({ rows }) {
             <td>{e.date}</td>
             <td>{e.recipientChar}</td>
             <td><ItemLink name={e.itemName} /></td>
-            <td>{e.difficulty || '—'}</td>
+            <td>
+              {editable ? (
+                <select
+                  className={`lh-diff-select${corrections[e.id] ? ' lh-diff-select-set' : ''}`}
+                  value={corrections[e.id] ?? ''}
+                  onChange={ev => onCorrect(e.id, ev.target.value)}
+                >
+                  <option value="">{e.difficulty || '—'}</option>
+                  {DIFF_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              ) : (
+                e.difficulty || '—'
+              )}
+            </td>
             <td>{e.upgradeType || '—'}</td>
             <td className="text-muted" style={{ fontSize: '0.82em' }}>{e.skipReason}</td>
           </tr>
@@ -94,11 +110,41 @@ function SkippedTable({ rows }) {
 }
 
 function SkippedSection({ skipped }) {
-  const [open, setOpen] = useState(false);
+  const [open,    setOpen]    = useState(false);
   const [openSub, setOpenSub] = useState({});
+  const [corrections, setCorrections] = useState({});
+  const [saving,  setSaving]  = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
 
   const total = SKIP_SECTIONS.reduce((n, s) => n + (skipped[s.key]?.length ?? 0), 0);
   if (total === 0) return null;
+
+  const pendingCount = Object.values(corrections).filter(Boolean).length;
+
+  const handleCorrect = (id, difficulty) =>
+    setCorrections(prev => ({ ...prev, [id]: difficulty }));
+
+  const handleSave = async () => {
+    const list = Object.entries(corrections)
+      .filter(([, d]) => d)
+      .map(([id, difficulty]) => ({ id, difficulty }));
+    if (!list.length) return;
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      const r = await fetch(apiPath('/api/loot/entries'), {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ corrections: list }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error ?? r.status);
+      window.location.reload();
+    } catch (e) {
+      setSaveErr(e.message);
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="card lh-skipped-card">
@@ -106,6 +152,16 @@ function SkippedSection({ skipped }) {
         <span className={`lh-chevron${open ? ' lh-chevron-open' : ''}`}>▶</span>
         <span>Skipped / Ignored Rows</span>
         <span className="lh-group-count">{total}</span>
+        {pendingCount > 0 && (
+          <button
+            className="btn lh-save-corrections-btn"
+            disabled={saving}
+            onClick={e => { e.stopPropagation(); handleSave(); }}
+          >
+            {saving ? 'Saving…' : `Save ${pendingCount} correction${pendingCount !== 1 ? 's' : ''}`}
+          </button>
+        )}
+        {saveErr && <span className="lh-save-err">{saveErr}</span>}
       </div>
       {open && (
         <div className="lh-skipped-body">
@@ -113,6 +169,7 @@ function SkippedSection({ skipped }) {
             const rows = skipped[key] ?? [];
             if (!rows.length) return null;
             const subOpen = openSub[key] ?? false;
+            const isEditable = key === 'wrongDifficulty';
             return (
               <div key={key} className="lh-skip-group">
                 <div className="lh-skip-group-header" onClick={() => setOpenSub(p => ({ ...p, [key]: !p[key] }))}>
@@ -121,7 +178,13 @@ function SkippedSection({ skipped }) {
                   <span className="lh-group-count">{rows.length}</span>
                   <span className="text-muted lh-skip-desc">{desc}</span>
                 </div>
-                {subOpen && <SkippedTable rows={rows} />}
+                {subOpen && (
+                  <SkippedTable
+                    rows={rows}
+                    corrections={isEditable ? corrections : undefined}
+                    onCorrect={isEditable ? handleCorrect : undefined}
+                  />
+                )}
               </div>
             );
           })}

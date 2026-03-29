@@ -10,7 +10,7 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import {
   primeTeamCache,
   getRoster, getRclcResponseMap,
-  getLootLog, appendLootEntries, getRaids,
+  getLootLog, appendLootEntries, patchLootEntryDifficulties, getRaids,
   getConfig,
 } from '../../../lib/sheets.js';
 import { parseRclcCsv, buildLootEntries, buildExistingKeys, isRecipeItem } from '../../../lib/rclc.js';
@@ -132,6 +132,34 @@ router.get('/history', async (c) => {
   players.sort((a, b) => b.lootPerRaid - a.lootPerRaid || a.charName.localeCompare(b.charName));
 
   return c.json({ players, heroicWeight, normalWeight, nonBisWeight, skipped });
+});
+
+// ── PATCH /entries ────────────────────────────────────────────────────────────
+
+router.patch('/entries', async (c) => {
+  if (!c.get('session').user?.isOfficer) {
+    return c.json({ error: 'Officer access required.' }, 403);
+  }
+
+  const { corrections } = await c.req.json();
+  if (!Array.isArray(corrections) || !corrections.length) {
+    return c.json({ error: 'corrections must be a non-empty array of { id, difficulty }.' }, 400);
+  }
+
+  const VALID_DIFF = new Set(['Normal', 'Heroic', 'Mythic']);
+  const correctionById = new Map();
+  for (const { id, difficulty } of corrections) {
+    if (id && VALID_DIFF.has(difficulty)) correctionById.set(id, difficulty);
+  }
+  if (!correctionById.size) {
+    return c.json({ error: 'No valid corrections supplied.' }, 400);
+  }
+
+  const { teamSheetId } = c.get('session').user;
+  const updated = await patchLootEntryDifficulties(teamSheetId, correctionById);
+  if (!updated) return c.json({ error: 'No matching loot log entries found.' }, 404);
+
+  return c.json({ updated });
 });
 
 // ── POST /import ──────────────────────────────────────────────────────────────

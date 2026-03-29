@@ -1945,3 +1945,18 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 }
 .lh-skip-group-header:hover { background: rgba(255,255,255,0.04); }
 .lh-skip-desc { font-size: 0.75rem; font-weight: 400; margin-left: 4px; }
+
+.lh-diff-select {
+  background: var(--surface2, #1a1a1a); color: var(--text-muted);
+  border: 1px solid var(--border, #333); border-radius: 4px;
+  padding: 2px 6px; font-size: 0.82rem; cursor: pointer;
+}
+.lh-diff-select-set { border-color: var(--primary, #CC1010); color: var(--text); }
+.lh-save-corrections-btn {
+  margin-left: auto; padding: 3px 12px; font-size: 0.78rem;
+  background: var(--primary, #CC1010); color: #fff; border: none;
+  border-radius: 4px; cursor: pointer; flex-shrink: 0;
+}
+.lh-save-corrections-btn:hover:not(:disabled) { background: #aa0d0d; }
+.lh-save-corrections-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.lh-save-err { font-size: 0.75rem; color: #f87171; margin-left: 8px; }

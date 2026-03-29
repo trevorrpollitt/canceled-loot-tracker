@@ -774,6 +774,32 @@ export async function appendLootEntries(sheetId, entries) {
 }
 
 /**
+ * Patch the Difficulty field (col F) for a set of Loot Log entries identified by ID.
+ * Used by the loot history page to correct entries that were imported with a missing
+ * or unrecognised difficulty value.
+ *
+ * @param {string}   sheetId
+ * @param {Map<string,string>} correctionById  entry ID → new difficulty string
+ * @returns {number} count of rows actually updated
+ */
+export async function patchLootEntryDifficulties(sheetId, correctionById) {
+  log.verbose(`[sheets] patchLootEntryDifficulties ${correctionById.size} entries (sheet ${sheetId.slice(-6)})`);
+  const rows = await readRange(sheetId, 'Loot Log!A2:A');
+  const updates = [];
+  for (let i = 0; i < rows.length; i++) {
+    const id = String(rows[i][0] ?? '').trim();
+    if (correctionById.has(id)) {
+      updates.push({ range: `Loot Log!F${i + 2}`, values: [[correctionById.get(id)]] });
+    }
+  }
+  if (updates.length) {
+    await batchWriteRanges(sheetId, updates);
+    cacheInvalidate(sheetId, 'lootLog');
+  }
+  return updates.length;
+}
+
+/**
  * RCLC Response Map tab  (A=RCLCButton  B=InternalType  C=CountedInTotals)
  * Returns a Map<rclcButtonLabel, { internalType: string, counted: boolean }>
  *
