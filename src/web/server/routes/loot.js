@@ -10,7 +10,8 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import {
   primeTeamCache,
   getRoster, getRclcResponseMap,
-  getLootLog, appendLootEntries, patchLootEntryDifficulties, patchLootEntryIgnored, backfillLootEntryIds, getRaids,
+  getLootLog, appendLootEntries, patchLootEntryDifficulties, patchLootEntryIgnored,
+  reassignLootEntries, backfillLootEntryIds, getRaids,
   getConfig,
 } from '../../../lib/sheets.js';
 import { parseRclcCsv, buildLootEntries, buildExistingKeys, isRecipeItem } from '../../../lib/rclc.js';
@@ -135,7 +136,13 @@ router.get('/history', async (c) => {
   // Primary sort: lootPerRaid desc. Secondary: charName alpha.
   players.sort((a, b) => b.lootPerRaid - a.lootPerRaid || a.charName.localeCompare(b.charName));
 
-  return c.json({ players, heroicWeight, normalWeight, nonBisWeight, skipped });
+  // Send active + bench roster so the client can populate the reassignment dropdown
+  const rosterMembers = roster
+    .filter(r => r.status === 'Active' || r.status === 'Bench')
+    .map(r => ({ charId: r.charId, charName: r.charName, spec: r.spec, status: r.status }))
+    .sort((a, b) => a.charName.localeCompare(b.charName));
+
+  return c.json({ players, heroicWeight, normalWeight, nonBisWeight, skipped, rosterMembers });
 });
 
 // ── POST /reprocess ───────────────────────────────────────────────────────────
@@ -150,6 +157,35 @@ router.post('/reprocess', async (c) => {
   const { teamSheetId } = c.get('session').user;
   const result = await backfillLootEntryIds(teamSheetId);
   return c.json(result);
+});
+
+// ── PATCH /entries/reassign ───────────────────────────────────────────────────
+// Manually reassign loot entries to a specific roster character (rename fix).
+
+router.patch('/entries/reassign', async (c) => {
+  if (!c.get('session').user?.isOfficer) {
+    return c.json({ error: 'Officer access required.' }, 403);
+  }
+  const { assignments } = await c.req.json();
+  if (!Array.isArray(assignments) || !assignments.length) {
+    return c.json({ error: 'assignments must be a non-empty array of { id, charId }.' }, 400);
+  }
+
+  const { teamSheetId } = c.get('session').user;
+  const roster  = await getRoster(teamSheetId);
+  const charById = new Map(roster.map(r => [r.charId, r]));
+
+  const resolved = assignments
+    .map(({ id, charId }) => {
+      const char = charById.get(charId);
+      return char ? { id, charId, charName: char.charName, ownerId: char.ownerId } : null;
+    })
+    .filter(Boolean);
+
+  if (!resolved.length) return c.json({ error: 'No valid charIds found in roster.' }, 400);
+
+  const updated = await reassignLootEntries(teamSheetId, resolved);
+  return c.json({ updated });
 });
 
 // ── PATCH /ignored ────────────────────────────────────────────────────────────

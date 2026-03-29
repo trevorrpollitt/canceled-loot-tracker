@@ -68,10 +68,11 @@ const SKIP_SECTIONS = [
 
 const DIFF_OPTIONS = ['Normal', 'Heroic', 'Mythic'];
 
-function SkippedTable({ rows, corrections, onCorrect, onIgnore, onUnignore }) {
-  const editable   = !!onCorrect;
-  const ignoreable = !!onIgnore;
+function SkippedTable({ rows, corrections, onCorrect, onIgnore, onUnignore, reassignments, onReassign, rosterMembers }) {
+  const editable    = !!onCorrect;
+  const ignoreable  = !!onIgnore;
   const unignorable = !!onUnignore;
+  const reassignable = !!onReassign;
   return (
     <table className="loot-table lh-detail-table" style={{ marginTop: 8 }}>
       <thead>
@@ -82,6 +83,7 @@ function SkippedTable({ rows, corrections, onCorrect, onIgnore, onUnignore }) {
           <th>Diff</th>
           <th>Type</th>
           <th>Reason</th>
+          {reassignable && <th>Reassign to</th>}
           <th></th>
         </tr>
       </thead>
@@ -107,6 +109,22 @@ function SkippedTable({ rows, corrections, onCorrect, onIgnore, onUnignore }) {
             </td>
             <td>{e.upgradeType || '—'}</td>
             <td className="text-muted" style={{ fontSize: '0.82em' }}>{e.skipReason}</td>
+            {reassignable && (
+              <td>
+                <select
+                  className={`lh-diff-select${reassignments[e.id] ? ' lh-diff-select-set' : ''}`}
+                  value={reassignments[e.id] ?? ''}
+                  onChange={ev => onReassign(e.id, ev.target.value)}
+                >
+                  <option value="">— pick character —</option>
+                  {rosterMembers.map(r => (
+                    <option key={r.charId} value={r.charId}>
+                      {r.charName} ({r.spec})
+                    </option>
+                  ))}
+                </select>
+              </td>
+            )}
             <td className="lh-action-cell">
               {ignoreable  && <button className="lh-ignore-btn"   onClick={() => onIgnore(e.id)}>Ignore</button>}
               {unignorable && <button className="lh-unignore-btn" onClick={() => onUnignore(e.id)}>Unignore</button>}
@@ -118,11 +136,17 @@ function SkippedTable({ rows, corrections, onCorrect, onIgnore, onUnignore }) {
   );
 }
 
-function SkippedSection({ skipped, open, onToggle, sectionRef }) {
-  const [openSub,      setOpenSub]      = useState({});
-  const [reprocessing, setReprocessing] = useState(false);
-  const [reprocessErr, setReprocessErr] = useState(null);
-  const [ignoring,     setIgnoring]     = useState(false);
+function SkippedSection({ skipped, open, onToggle, sectionRef, rosterMembers = [] }) {
+  const [openSub,        setOpenSub]        = useState({});
+  const [reprocessing,   setReprocessing]   = useState(false);
+  const [reprocessErr,   setReprocessErr]   = useState(null);
+  const [ignoring,       setIgnoring]       = useState(false);
+  const [corrections,    setCorrections]    = useState({});
+  const [saving,         setSaving]         = useState(false);
+  const [saveErr,        setSaveErr]        = useState(null);
+  const [reassignments,  setReassignments]  = useState({});
+  const [reassigning,    setReassigning]    = useState(false);
+  const [reassignErr,    setReassignErr]    = useState(null);
 
   const patchIgnored = async (ids, ignored) => {
     setIgnoring(true);
@@ -139,17 +163,18 @@ function SkippedSection({ skipped, open, onToggle, sectionRef }) {
       setIgnoring(false);
     }
   };
-  const [corrections, setCorrections] = useState({});
-  const [saving,  setSaving]  = useState(false);
-  const [saveErr, setSaveErr] = useState(null);
 
   const total = SKIP_SECTIONS.reduce((n, s) => n + (skipped[s.key]?.length ?? 0), 0);
   if (total === 0) return null;
 
-  const pendingCount = Object.values(corrections).filter(Boolean).length;
+  const pendingCorrections = Object.values(corrections).filter(Boolean).length;
+  const pendingReassigns   = Object.values(reassignments).filter(Boolean).length;
 
-  const handleCorrect = (id, difficulty) =>
+  const handleCorrect    = (id, difficulty) =>
     setCorrections(prev => ({ ...prev, [id]: difficulty }));
+
+  const handleReassign   = (id, charId) =>
+    setReassignments(prev => ({ ...prev, [id]: charId }));
 
   const handleSave = async () => {
     const list = Object.entries(corrections)
@@ -173,19 +198,51 @@ function SkippedSection({ skipped, open, onToggle, sectionRef }) {
     }
   };
 
+  const handleSaveReassignments = async () => {
+    const assignments = Object.entries(reassignments)
+      .filter(([, charId]) => charId)
+      .map(([id, charId]) => ({ id, charId }));
+    if (!assignments.length) return;
+    setReassigning(true);
+    setReassignErr(null);
+    try {
+      const r = await fetch(apiPath('/api/loot/entries/reassign'), {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignments }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error ?? r.status);
+      window.location.reload();
+    } catch (e) {
+      setReassignErr(e.message);
+      setReassigning(false);
+    }
+  };
+
   return (
     <div className="card lh-skipped-card" ref={sectionRef}>
       <div className="lh-skipped-header" onClick={onToggle}>
         <span className={`lh-chevron${open ? ' lh-chevron-open' : ''}`}>▶</span>
         <span>Skipped / Ignored Rows</span>
         <span className="lh-group-count">{total}</span>
-        {pendingCount > 0 && (
+        {pendingReassigns > 0 && (
+          <button
+            className="btn lh-save-corrections-btn"
+            disabled={reassigning}
+            onClick={e => { e.stopPropagation(); handleSaveReassignments(); }}
+          >
+            {reassigning ? 'Saving…' : `Save ${pendingReassigns} reassignment${pendingReassigns !== 1 ? 's' : ''}`}
+          </button>
+        )}
+        {reassignErr && <span className="lh-save-err">{reassignErr}</span>}
+        {pendingCorrections > 0 && (
           <button
             className="btn lh-save-corrections-btn"
             disabled={saving}
             onClick={e => { e.stopPropagation(); handleSave(); }}
           >
-            {saving ? 'Saving…' : `Save ${pendingCount} correction${pendingCount !== 1 ? 's' : ''}`}
+            {saving ? 'Saving…' : `Save ${pendingCorrections} correction${pendingCorrections !== 1 ? 's' : ''}`}
           </button>
         )}
         {saveErr && <span className="lh-save-err">{saveErr}</span>}
@@ -249,10 +306,13 @@ function SkippedSection({ skipped, open, onToggle, sectionRef }) {
                 {subOpen && (
                   <SkippedTable
                     rows={rows}
-                    corrections={isEditable  ? corrections : undefined}
-                    onCorrect={isEditable    ? handleCorrect : undefined}
-                    onIgnore={isIgnorable    ? (id) => patchIgnored([id], true)  : undefined}
-                    onUnignore={isIgnored    ? (id) => patchIgnored([id], false) : undefined}
+                    corrections={isEditable     ? corrections    : undefined}
+                    onCorrect={isEditable       ? handleCorrect  : undefined}
+                    onIgnore={isIgnorable       ? (id) => patchIgnored([id], true)  : undefined}
+                    onUnignore={isIgnored       ? (id) => patchIgnored([id], false) : undefined}
+                    reassignments={isRosterMatch ? reassignments  : undefined}
+                    onReassign={isRosterMatch   ? handleReassign : undefined}
+                    rosterMembers={isRosterMatch ? rosterMembers  : undefined}
                   />
                 )}
               </div>
@@ -302,7 +362,7 @@ export default function LootHistory() {
   });
   const toggleGroup = (label)  => setExpandedGroups(prev => ({ ...prev, [label]: !prev[label] }));
 
-  const { players, heroicWeight = 0.2, normalWeight = 0, nonBisWeight = 0.333, skipped = {} } = data;
+  const { players, heroicWeight = 0.2, normalWeight = 0, nonBisWeight = 0.333, skipped = {}, rosterMembers = [] } = data;
 
   const errorCounts = ERROR_KEYS.map(k => ({ key: k, count: skipped[k]?.length ?? 0 })).filter(e => e.count > 0);
   const totalErrors = errorCounts.reduce((n, e) => n + e.count, 0);
@@ -428,6 +488,7 @@ export default function LootHistory() {
         open={skippedOpen}
         onToggle={() => setSkippedOpen(o => !o)}
         sectionRef={skippedRef}
+        rosterMembers={rosterMembers}
       />
     </div>
   );

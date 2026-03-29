@@ -847,6 +847,38 @@ export async function backfillLootEntryIds(sheetId) {
 }
 
 /**
+ * Manually reassign Loot Log entries to specific roster characters, overwriting
+ * RecipientId (col G), RecipientChar (col H), and RecipientCharId (col K).
+ * Used when a character was renamed and the old name no longer matches the roster.
+ *
+ * @param {string}   sheetId
+ * @param {{ id: string, charId: string, charName: string, ownerId: string }[]} assignments
+ * @returns {number} count of entries updated
+ */
+export async function reassignLootEntries(sheetId, assignments) {
+  log.verbose(`[sheets] reassignLootEntries ${assignments.length} entries (sheet ${sheetId.slice(-6)})`);
+  const byId  = new Map(assignments.map(a => [a.id, a]));
+  const rows  = await readRange(sheetId, 'Loot Log!A2:A');
+  const updates = [];
+  for (let i = 0; i < rows.length; i++) {
+    const id = String(rows[i][0] ?? '').trim();
+    if (!byId.has(id)) continue;
+    const { charName, ownerId, charId } = byId.get(id);
+    const row = i + 2;
+    updates.push(
+      { range: `Loot Log!G${row}`, values: [[ownerId]]  },
+      { range: `Loot Log!H${row}`, values: [[charName]] },
+      { range: `Loot Log!K${row}`, values: [[charId]]   },
+    );
+  }
+  if (updates.length) {
+    await batchWriteRanges(sheetId, updates);
+    cacheInvalidate(sheetId, 'lootLog');
+  }
+  return updates.length / 3;
+}
+
+/**
  * Patch the Difficulty field (col F) for a set of Loot Log entries identified by ID.
  * Used by the loot history page to correct entries that were imported with a missing
  * or unrecognised difficulty value.
