@@ -2012,3 +2012,69 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .lh-ignore-btn:hover   { background: rgba(204,16,16,0.3); }
 .lh-unignore-btn { background: rgba(255,255,255,0.07); color: var(--text-muted); }
 .lh-unignore-btn:hover { background: rgba(255,255,255,0.14); }
+
+/* ── Config pages (AdminTeamConfig, AdminGlobalConfig) ────────────────────── */
+.config-field {
+  margin-bottom: 16px;
+}
+.config-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.config-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+.config-input {
+  width: 100%;
+  max-width: 420px;
+  padding: 6px 10px;
+  background: var(--surface, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+}
+.config-input-narrow { max-width: 140px; }
+.config-select {
+  padding: 6px 10px;
+  background: var(--surface, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  min-width: 200px;
+}
+.config-rclc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.config-rclc-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--text-muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border, #333);
+}
+.config-rclc-table td {
+  padding: 5px 8px;
+  vertical-align: middle;
+}
+.config-rclc-table .config-input { max-width: 200px; }
+.btn-icon-danger {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  line-height: 1;
+}
+.btn-icon-danger:hover { color: #f87171; background: rgba(204,16,16,0.15); }

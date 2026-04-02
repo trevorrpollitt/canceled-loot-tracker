@@ -33,6 +33,128 @@ export const SIMC_SLOT_MAP = {
   off_hand:   'Off-Hand',
 };
 
+/** SimC class key → app class name */
+const SIMC_CLASS_MAP = {
+  deathknight: 'Death Knight',
+  demonhunter: 'Demon Hunter',
+  druid:       'Druid',
+  evoker:      'Evoker',
+  hunter:      'Hunter',
+  mage:        'Mage',
+  monk:        'Monk',
+  paladin:     'Paladin',
+  priest:      'Priest',
+  rogue:       'Rogue',
+  shaman:      'Shaman',
+  warlock:     'Warlock',
+  warrior:     'Warrior',
+};
+
+/**
+ * SimC class key + spec slug → canonical app spec name.
+ * Keyed as `${simcClass}/${specSlug}` to disambiguate shared slugs like
+ * frost (DK vs Mage), restoration (Druid vs Shaman), holy/protection.
+ */
+const SIMC_SPEC_MAP = {
+  // Death Knight
+  'deathknight/blood':          'Blood Death Knight',
+  'deathknight/frost':          'Frost Death Knight',
+  'deathknight/unholy':         'Unholy Death Knight',
+  // Demon Hunter
+  'demonhunter/havoc':          'Havoc Demon Hunter',
+  'demonhunter/vengeance':      'Vengeance Demon Hunter',
+  // Druid
+  'druid/balance':              'Balance Druid',
+  'druid/feral':                'Feral Druid',
+  'druid/guardian':             'Guardian Druid',
+  'druid/restoration':          'Restoration Druid',
+  // Evoker
+  'evoker/devastation':         'Devastation Evoker',
+  'evoker/preservation':        'Preservation Evoker',
+  'evoker/augmentation':        'Augmentation Evoker',
+  // Hunter
+  'hunter/beast_mastery':       'Beast Mastery Hunter',
+  'hunter/marksmanship':        'Marksmanship Hunter',
+  'hunter/survival':            'Survival Hunter',
+  // Mage
+  'mage/arcane':                'Arcane Mage',
+  'mage/fire':                  'Fire Mage',
+  'mage/frost':                 'Frost Mage',
+  // Monk
+  'monk/brewmaster':            'Brewmaster Monk',
+  'monk/mistweaver':            'Mistweaver Monk',
+  'monk/windwalker':            'Windwalker Monk',
+  // Paladin
+  'paladin/holy':               'Holy Paladin',
+  'paladin/protection':         'Protection Paladin',
+  'paladin/retribution':        'Retribution Paladin',
+  // Priest
+  'priest/discipline':          'Discipline Priest',
+  'priest/holy':                'Holy Priest',
+  'priest/shadow':              'Shadow Priest',
+  // Rogue
+  'rogue/assassination':        'Assassination Rogue',
+  'rogue/outlaw':               'Outlaw Rogue',
+  'rogue/subtlety':             'Subtlety Rogue',
+  // Shaman
+  'shaman/elemental':           'Elemental Shaman',
+  'shaman/enhancement':         'Enhancement Shaman',
+  'shaman/restoration':         'Restoration Shaman',
+  // Warlock
+  'warlock/affliction':         'Affliction Warlock',
+  'warlock/demonology':         'Demonology Warlock',
+  'warlock/destruction':        'Destruction Warlock',
+  // Warrior
+  'warrior/arms':               'Arms Warrior',
+  'warrior/fury':               'Fury Warrior',
+  'warrior/protection':         'Protection Warrior',
+};
+
+/**
+ * Parse the header of a SimC profile string, extracting character name,
+ * class, and spec for validation purposes.
+ *
+ * @param {string} text  Raw SimC export text.
+ * @returns {{ charName: string, charClass: string, spec: string } | null}
+ *   Returns null if the header cannot be identified (e.g. gear-only paste).
+ *   `spec` is the canonical app spec name (e.g. "Arms Warrior"), or empty
+ *   string if the spec line is missing or unrecognised.
+ */
+export function parseSimcHeader(text) {
+  let charName  = null;
+  let simcClass = null;
+  let specSlug  = null;
+
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const eqIdx = line.indexOf('=');
+    if (eqIdx < 0) continue;
+
+    const key = line.slice(0, eqIdx).toLowerCase();
+    const val = line.slice(eqIdx + 1).trim();
+
+    if (SIMC_CLASS_MAP[key] && charName === null) {
+      // e.g.  warrior="Morthrak"
+      simcClass = key;
+      charName  = val.replace(/^"(.*)"$/, '$1').split('-')[0]; // strip server suffix
+    } else if (key === 'spec' && specSlug === null) {
+      specSlug = val.toLowerCase();
+    }
+
+    if (charName !== null && specSlug !== null) break;
+  }
+
+  if (!charName || !simcClass) return null;
+
+  const specKey    = `${simcClass}/${specSlug ?? ''}`;
+  const charClass  = SIMC_CLASS_MAP[simcClass];
+  const spec       = SIMC_SPEC_MAP[specKey] ?? '';
+
+  return { charName, charClass, spec };
+}
+
 /**
  * Parse a SimC profile string, returning an array of equipped gear items.
  *

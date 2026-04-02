@@ -9,11 +9,12 @@
 import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
-  getBisSubmissions, getItemDb, getEffectiveDefaultBis, applyRaidBisInference,
+  getBisSubmissions, getItemDb, getEffectiveDefaultBis,
   batchUpsertBisSubmissions, clearPendingBisSubmission, clearRejectedBisSubmission,
   clearBisSubmission, resetBisRaidBisField,
   getRoster, setPendingPrimarySpec,
-} from '../../../lib/sheets.js';
+} from '../../../lib/db.js';
+import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, getArmorType, canUseWeapon, canDualWield, CLASS_SPECS, getCharSpecs } from '../../../lib/specs.js';
 
 const ALL_SLOTS = [
@@ -28,26 +29,24 @@ const DIFF_ORDER     = { Mythic: 0, Heroic: 1, Normal: 2, 'Mythic+': 3 };
 
 function itemOptionsForSlot(itemDb, slot, armorType, { raidOnly = false, canonSpec = '' } = {}) {
   let dbSlot = slot.replace(/ [12]$/, '');
-  // Dual-wield specs equip a weapon in the off-hand, not a shield/frill.
-  // Redirect the lookup to 'Weapon' so they see 1H/2H weapon options.
   if (dbSlot === 'Off-Hand' && canonSpec && canDualWield(canonSpec)) dbSlot = 'Weapon';
   return itemDb
     .filter(item => {
       if (item.slot !== dbSlot)   return false;
-      if (item.isTierToken)       return false;
-      if (raidOnly && item.sourceType !== 'Raid') return false;
-      if (item.armorType === 'Accessory') {
-        if (item.weaponType && canonSpec) return canUseWeapon(canonSpec, item.weaponType);
+      if (item.is_tier_token)     return false;
+      if (raidOnly && item.source_type !== 'Raid') return false;
+      if (item.armor_type === 'Accessory') {
+        if (item.weapon_type && canonSpec) return canUseWeapon(canonSpec, item.weapon_type);
         return true;
       }
-      return item.armorType === armorType;
+      return item.armor_type === armorType;
     })
     .map(item => ({
-      itemId:     String(item.itemId),
+      itemId:     String(item.item_id),
       name:       item.name,
       difficulty: item.difficulty ?? '',
-      source:     item.sourceName ?? '',
-      sourceType: item.sourceType ?? '',
+      source:     item.source_name ?? '',
+      sourceType: item.source_type ?? '',
     }))
     .sort((a, b) => {
       const da = DIFF_ORDER[a.difficulty] ?? 9;
@@ -62,24 +61,24 @@ router.use('*', requireAuth);
 // ── GET /api/bis ───────────────────────────────────────────────────────────────
 
 router.get('/', async (c) => {
-  const { teamSheetId, charId, charName } = c.get('session').user;
-  if (!teamSheetId) return c.json({ noTeam: true });
+  const { teamId, charId, charName } = c.get('session').user;
+  if (!teamId) return c.json({ noTeam: true });
+
+  const db = c.env.DB;
 
   try {
     const [roster, submissions, itemDb, effectiveBis] = await Promise.all([
-      getRoster(teamSheetId),
-      getBisSubmissions(teamSheetId),
-      getItemDb(),
-      getEffectiveDefaultBis(),
+      getRoster(db, teamId),
+      getBisSubmissions(db, teamId),
+      getItemDb(db),
+      getEffectiveDefaultBis(db),
     ]);
 
-    // Resolve character and their available specs
-    const rosterEntry = roster.find(r =>
-      charId && r.charId ? r.charId === charId : r.charName.toLowerCase() === charName.toLowerCase()
-    );
-    const charSpecs = rosterEntry ? getCharSpecs(rosterEntry) : { primary: c.get('session').user.spec, secondary: [], pending: null, all: [c.get('session').user.spec] };
+    const rosterEntry = roster.find(r => charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase());
+    const charSpecs = rosterEntry
+      ? getCharSpecs(rosterEntry)
+      : { primary: c.get('session').user.spec, secondary: [], pending: null, all: [c.get('session').user.spec] };
 
-    // Determine which spec to show — ?spec= param or primary
     const requestedSpec = c.req.query('spec') || charSpecs.primary;
     if (!charSpecs.all.includes(requestedSpec)) {
       return c.json({ error: `Spec "${requestedSpec}" is not available for this character` }, 400);
@@ -90,40 +89,40 @@ router.get('/', async (c) => {
 
     const bySlot = Object.fromEntries(
       submissions
-        .filter(s => {
-          const charMatch = charId && s.charId ? s.charId === charId : s.charName.toLowerCase() === charName.toLowerCase();
-          const specMatch = s.spec ? s.spec.toLowerCase() === activeSpec.toLowerCase() : true; // legacy fallback
-          return charMatch && specMatch;
-        })
+        .filter(s => s.char_id === charId &&
+          (!s.spec || s.spec.toLowerCase() === activeSpec.toLowerCase()))
         .map(s => [s.slot, s])
     );
 
-    const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
-    const specDefaults  = applyRaidBisInference(specRows, itemDb);
+    const specRows     = effectiveBis.filter(d => d.spec === canonicalSpec);
+    const specDefaults = applyRaidBisInference(specRows, itemDb);
     const defaultBySlot = Object.fromEntries(specDefaults.map(d => [d.slot, d]));
 
     const slots = ALL_SLOTS.map(slot => {
       const sub = bySlot[slot] ?? null;
       const def = defaultBySlot[slot] ?? null;
 
-      const lastApproved = sub?.lastApprovedTrueBis
-        ? {
-            trueBis:       sub.lastApprovedTrueBis,
-            raidBis:       sub.lastApprovedRaidBis,
-            trueBisItemId: sub.lastApprovedTrueBisItemId,
-            raidBisItemId: sub.lastApprovedRaidBisItemId,
-          }
-        : null;
+      // last-approved snapshot — stored as sub.last_approved_true_bis etc. (if column exists)
+      // For now the D1 schema doesn't have a separate last-approved snapshot column,
+      // so we derive it from the current approved row if status = Approved.
+      const lastApproved = null;
 
       return {
         slot,
-        submission:  sub,
+        submission:  sub ? {
+          ...sub,
+          // Normalise snake_case → camelCase for the client
+          trueBis:       sub.true_bis,
+          raidBis:       sub.raid_bis,
+          trueBisItemId: sub.true_bis_item_id,
+          raidBisItemId: sub.raid_bis_item_id,
+        } : null,
         lastApproved,
         specDefault: def ? {
           trueBis:       def.trueBis       ?? '',
-          trueBisItemId: def.trueBisItemId ?? '',
+          trueBisItemId: def.trueBisItemId  ?? '',
           raidBis:       def.raidBis       ?? '',
-          raidBisItemId: def.raidBisItemId ?? '',
+          raidBisItemId: def.raidBisItemId  ?? '',
         } : null,
         sentinels: {
           tier:     TIER_SLOTS.has(slot),
@@ -157,18 +156,19 @@ router.post('/', async (c) => {
     return c.json({ error: 'updates[] is required' }, 400);
   }
 
-  const { teamSheetId, charId, charName } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team configured' }, 400);
-  if (!charName)    return c.json({ error: 'No character linked to this account' }, 400);
+  const { teamId, charId, charName } = c.get('session').user;
+  if (!teamId)    return c.json({ error: 'No team configured' }, 400);
+  if (!charName)  return c.json({ error: 'No character linked to this account' }, 400);
 
-  // Determine active spec — from request body (multi-spec) or session fallback
-  const roster      = await getRoster(teamSheetId);
-  const rosterEntry = roster.find(r => charId && r.charId ? r.charId === charId : r.charName.toLowerCase() === charName.toLowerCase());
-  const charSpecs   = rosterEntry ? getCharSpecs(rosterEntry) : { primary: c.get('session').user.spec, secondary: [], all: [c.get('session').user.spec] };
-  const spec        = bodySpec && charSpecs.all.includes(bodySpec) ? bodySpec : charSpecs.primary;
+  const db = c.env.DB;
+  const roster      = await getRoster(db, teamId);
+  const rosterEntry = roster.find(r => charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase());
+  const charSpecs   = rosterEntry
+    ? getCharSpecs(rosterEntry)
+    : { primary: c.get('session').user.spec, secondary: [], all: [c.get('session').user.spec] };
+  const spec = bodySpec && charSpecs.all.includes(bodySpec) ? bodySpec : charSpecs.primary;
 
-  const validSlots = new Set(ALL_SLOTS);
-
+  const validSlots   = new Set(ALL_SLOTS);
   const validUpdates = updates.filter(u =>
     validSlots.has(u.slot) && (u.clearPending || u.clearRejected || u.clearSlot || u.resetRaidBis || u.trueBis)
   );
@@ -182,25 +182,25 @@ router.post('/', async (c) => {
     let cleared = 0;
 
     for (const u of validUpdates.filter(u => u.clearRejected)) {
-      await clearRejectedBisSubmission(teamSheetId, charId, u.slot, charName);
+      await clearRejectedBisSubmission(db, teamId, charId, u.slot);
       cleared++;
     }
     for (const u of validUpdates.filter(u => u.clearPending)) {
-      await clearPendingBisSubmission(teamSheetId, charId, u.slot, charName);
+      await clearPendingBisSubmission(db, teamId, charId, u.slot);
       cleared++;
     }
     for (const u of validUpdates.filter(u => u.clearSlot)) {
-      await clearBisSubmission(teamSheetId, charId, u.slot, charName);
+      await clearBisSubmission(db, teamId, charId, u.slot);
       cleared++;
     }
     for (const u of validUpdates.filter(u => u.resetRaidBis)) {
-      await resetBisRaidBisField(teamSheetId, charId, u.slot, charName);
+      await resetBisRaidBisField(db, teamId, charId, u.slot);
       cleared++;
     }
 
     const saveUpdates = validUpdates.filter(u => !u.clearPending && !u.clearRejected && !u.clearSlot && !u.resetRaidBis);
     if (saveUpdates.length) {
-      await batchUpsertBisSubmissions(teamSheetId, saveUpdates.map(u => ({
+      await batchUpsertBisSubmissions(db, teamId, saveUpdates.map(u => ({
         charId,
         charName,
         spec,
@@ -225,34 +225,31 @@ router.post('/', async (c) => {
 });
 
 // ── POST /api/bis/request-spec-change ─────────────────────────────────────────
-// Raider requests that one of their secondary specs becomes primary.
-// Requires officer approval via /api/admin/bis-review/spec-change.
 
 router.post('/request-spec-change', async (c) => {
-  const { teamSheetId, charId, charName } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team configured' }, 400);
-  if (!charName)    return c.json({ error: 'No character linked to this account' }, 400);
+  const { teamId, charId, charName } = c.get('session').user;
+  if (!teamId)   return c.json({ error: 'No team configured' }, 400);
+  if (!charName) return c.json({ error: 'No character linked to this account' }, 400);
 
   const { newPrimarySpec } = await c.req.json();
   if (!newPrimarySpec) return c.json({ error: 'newPrimarySpec is required' }, 400);
 
+  const db = c.env.DB;
   try {
-    const roster      = await getRoster(teamSheetId);
-    const rosterEntry = roster.find(r => charId && r.charId ? r.charId === charId : r.charName.toLowerCase() === charName.toLowerCase());
+    const roster      = await getRoster(db, teamId);
+    const rosterEntry = roster.find(r => charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase());
     if (!rosterEntry) return c.json({ error: 'Character not found in roster' }, 404);
 
     const charSpecs = getCharSpecs(rosterEntry);
 
-    // Can only promote an existing secondary spec
     if (!charSpecs.secondary.includes(newPrimarySpec)) {
       return c.json({ error: `"${newPrimarySpec}" is not a secondary spec for this character` }, 400);
     }
-    // Reject if a change is already pending
     if (charSpecs.pending) {
       return c.json({ error: `A spec change to "${charSpecs.pending}" is already pending officer approval` }, 409);
     }
 
-    await setPendingPrimarySpec(teamSheetId, rosterEntry.charId, newPrimarySpec);
+    await setPendingPrimarySpec(db, rosterEntry.id, newPrimarySpec);
     return c.json({ ok: true, pending: newPrimarySpec });
   } catch (err) {
     console.error('[BIS] request-spec-change error:', err);

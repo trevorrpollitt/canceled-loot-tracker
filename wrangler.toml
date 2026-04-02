@@ -3,7 +3,6 @@ main = "src/web/server/index.js"
 compatibility_date = "2026-03-15"
 compatibility_flags = [ "nodejs_compat" ]
 
-# This maps your worker to the subpath we discussed
 [[routes]]
 pattern = "canceledwow.com/loot*"
 zone_name = "canceledwow.com"
@@ -14,6 +13,11 @@ zone_name = "canceledwow.com"
 [assets]
 directory = "./src/web/client/dist/loot"
 binding = "ASSETS"
+
+[[d1_databases]]
+binding  = "DB"
+database_name = "canceled-loot-tracker"
+database_id   = "local"  # replace with real ID after: wrangler d1 create canceled-loot-tracker
 
 [triggers]
 # WCL sync — poll for new/updated raid reports every 10 minutes
@@ -29,18 +33,15 @@ enabled = true
 invocation_logs = true
 
 [vars]
-# Discord vars
-DISCORD_CLIENT_ID = "1481498623416991796"
-DISCORD_GUILD_ID = "1282068816116977695"
+# Discord
+DISCORD_CLIENT_ID    = "1481498623416991796"
+DISCORD_GUILD_ID     = "1282068816116977695"
 DISCORD_REDIRECT_URI = "https://canceledwow.com/loot/api/auth/callback"
 
 # Web app
 APP_BASE_PATH = "/loot"
-LOG_LEVEL = "off"   # off | verbose | debug
+LOG_LEVEL     = "off"   # off | verbose | debug
 
 # Blizzard API
 BLIZZARD_CLIENT_ID = "cec2990ff08043058a1c11a3c417d4bc"
-BLIZZARD_REGION = "us"
-
-# Sheets
-MASTER_SHEET_ID = "1bgrwLzFsJkuoq1Y1GYw8ewLtg5LJ8udwFOKXvpVsPkY"
+BLIZZARD_REGION    = "us"

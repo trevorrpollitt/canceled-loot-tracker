@@ -8,7 +8,6 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { initTeams } from '../../lib/teams.js';
 import { sessionMiddleware } from './session.js';
 import { log } from '../../lib/logger.js';
 import { runWclSync } from '../../lib/wcl-sync.js';
@@ -42,19 +41,7 @@ app.use('*', cors({
 
 app.use('*', sessionMiddleware());
 
-// ── Lazy team initialisation ───────────────────────────────────────────────────
-// Workers disallow fetch() at module load time (global scope).
-// We init once on the first request and cache the promise so concurrent
-// requests still wait for the same initialisation rather than racing.
-
-let _teamsReady = null;
-
 app.use('*', async (c, next) => {
-  if (!_teamsReady) {
-    log.verbose('[web] First request — initialising teams');
-    _teamsReady = initTeams();
-  }
-  await _teamsReady;
   log.verbose(`[web] ${c.req.method} ${c.req.path}`);
   await next();
 });
@@ -101,8 +88,6 @@ export default {
 
   async scheduled(event, env, ctx) {
     log.verbose(`[cron] Scheduled trigger fired — cron="${event.cron}"`);
-    // Ensure teams are initialised before sync (may already be warm)
-    await initTeams();
-    await runWclSync();
+    await runWclSync(env.DB);
   },
 };

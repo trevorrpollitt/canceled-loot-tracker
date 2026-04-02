@@ -14,13 +14,14 @@ import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getDefaultBis, getDefaultBisOverrides, getItemDb, getSpecBisConfig, setSpecBisSource,
-  applyRaidBisInference, updateDefaultBisOverrides, getBisSubmissions,
-  approveBisSubmission, rejectBisSubmission, getConfig, clearWornBis,
+  updateDefaultBisOverrides, getBisSubmissions,
+  approveBisSubmission, rejectBisSubmission, getTeamConfig, setTeamConfigValue, clearWornBis,
   invalidateWornBisSlots, getRoster, approvePrimarySpecChange, rejectPrimarySpecChange,
-  getEffectiveDefaultBis,
-} from '../../../lib/sheets.js';
+  getEffectiveDefaultBis, getAllTeams, getGlobalConfig, setGlobalConfigValue,
+  getRclcResponseMapRows, setRclcResponseMap,
+} from '../../../lib/db.js';
+import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand, getCharSpecs } from '../../../lib/specs.js';
-import { getAllTeams } from '../../../lib/teams.js';
 import { runWclSyncForTeam, runWclSyncWornBisOnly } from '../../../lib/wcl-sync.js';
 
 const TIER_SLOTS     = new Set(['Head', 'Shoulders', 'Chest', 'Hands', 'Legs']);
@@ -32,21 +33,21 @@ function itemOptionsForSlot(itemDb, slot, armorType, canonSpec = '', raidOnly = 
   if (dbSlot === 'Off-Hand' && canonSpec && canDualWield(canonSpec)) dbSlot = 'Weapon';
   return itemDb
     .filter(item => {
-      if (raidOnly && item.sourceType !== 'Raid') return false;
-      if (item.slot !== dbSlot)       return false;
-      if (item.isTierToken)           return false;
-      if (item.armorType === 'Accessory') {
-        if (item.weaponType && canonSpec) return canUseWeapon(canonSpec, item.weaponType);
+      if (raidOnly && item.source_type !== 'Raid') return false;
+      if (item.slot !== dbSlot)     return false;
+      if (item.is_tier_token)       return false;
+      if (item.armor_type === 'Accessory') {
+        if (item.weapon_type && canonSpec) return canUseWeapon(canonSpec, item.weapon_type);
         return true;
       }
-      return item.armorType === armorType;
+      return item.armor_type === armorType;
     })
     .map(item => ({
-      itemId:     String(item.itemId),
+      itemId:     String(item.item_id),
       name:       item.name,
       difficulty: item.difficulty ?? '',
-      source:     item.sourceName ?? '',
-      sourceType: item.sourceType ?? '',
+      source:     item.source_name ?? '',
+      sourceType: item.source_type ?? '',
     }))
     .sort((a, b) => {
       const da = DIFF_ORDER[a.difficulty] ?? 9;
@@ -59,8 +60,6 @@ const router = new Hono();
 
 router.use('*', requireAuth);
 
-// Routes that edit guild-wide Default BIS (master sheet) require global officer role.
-// All other admin routes require only the per-team officer role.
 const requireGlobalOfficer = async (c, next) => {
   if (!c.get('session').user?.isGlobalOfficer) return c.json({ error: 'Global officers only' }, 403);
   await next();
@@ -77,12 +76,11 @@ router.get('/default-bis', requireGlobalOfficer, async (c) => {
   const requestedSource = c.req.query('source');
   if (!spec) return c.json({ error: 'spec is required' }, 400);
 
-  const { teamSheetId } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  const db = c.env.DB;
 
   try {
     const [allRows, overrideRows, itemDb, specConfig] = await Promise.all([
-      getDefaultBis(), getDefaultBisOverrides(), getItemDb(), getSpecBisConfig(),
+      getDefaultBis(db), getDefaultBisOverrides(db), getItemDb(db), getSpecBisConfig(db),
     ]);
 
     const canonicalSpec    = toCanonical(spec);
@@ -92,20 +90,18 @@ router.get('/default-bis', requireGlobalOfficer, async (c) => {
     const displaySource    = (requestedSource && availableSources.includes(requestedSource))
       ? requestedSource : preferredSource;
 
-    // Seed rows for this source (unchanged guide data — used for ★ indicator)
     const seedRows = specRows.filter(r => r.source === displaySource);
 
-    // Merge officer overrides on top of seed rows before inference
     const rows = seedRows.map(r => {
       const ovr = overrideRows.find(
         o => o.spec === canonicalSpec && o.slot === r.slot && o.source === r.source
       );
       return ovr ? {
         ...r,
-        trueBis:       ovr.trueBis       || r.trueBis,
-        trueBisItemId: ovr.trueBisItemId || r.trueBisItemId,
-        raidBis:       ovr.raidBis       || r.raidBis,
-        raidBisItemId: ovr.raidBisItemId || r.raidBisItemId,
+        true_bis:          ovr.true_bis          || r.true_bis,
+        true_bis_item_id:  ovr.true_bis_item_id  || r.true_bis_item_id,
+        raid_bis:          ovr.raid_bis          || r.raid_bis,
+        raid_bis_item_id:  ovr.raid_bis_item_id  || r.raid_bis_item_id,
       } : r;
     });
 
@@ -116,8 +112,8 @@ router.get('/default-bis', requireGlobalOfficer, async (c) => {
       const seed = seedRows.find(s => s.slot === row.slot);
       return {
         ...row,
-        trueBisSeed:    seed?.trueBis  ?? '',
-        raidBisSeed:    seed?.raidBis  ?? '',
+        trueBisSeed:    seed?.true_bis  ?? '',
+        raidBisSeed:    seed?.raid_bis  ?? '',
         options:        itemOptionsForSlot(itemDb, row.slot, armorType, canonicalSpec, true),
         overallOptions: itemOptionsForSlot(itemDb, row.slot, armorType, canonicalSpec, false),
         hasTier:        TIER_SLOTS.has(row.slot),
@@ -125,13 +121,10 @@ router.get('/default-bis', requireGlobalOfficer, async (c) => {
       };
     });
 
-    // For dual-wield specs whose default BIS was seeded from a 2H guide, the
-    // Off-Hand slot may be absent. Inject a synthetic editable row so officers
-    // can set the Raid BIS without needing to re-seed.
     if (canHaveOffHand(canonicalSpec) && !withOptions.some(r => r.slot === 'Off-Hand')) {
       withOptions.push({
         slot: 'Off-Hand', source: displaySource,
-        trueBis: '', trueBisItemId: '', raidBis: '', raidBisItemId: '',
+        true_bis: '', true_bis_item_id: '', raid_bis: '', raid_bis_item_id: '',
         trueBisSeed: '', raidBisSeed: '',
         raidBisAuto: false,
         options:        itemOptionsForSlot(itemDb, 'Off-Hand', armorType, canonicalSpec, true),
@@ -154,8 +147,7 @@ router.post('/default-bis', requireGlobalOfficer, async (c) => {
   if (!spec || !source || !Array.isArray(updates)) {
     return c.json({ error: 'spec, source, and updates[] are required' }, 400);
   }
-  const { teamSheetId } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  const db = c.env.DB;
   try {
     const canonicalSpec = toCanonical(spec);
     const writes = updates.map(u => ({
@@ -164,35 +156,31 @@ router.post('/default-bis', requireGlobalOfficer, async (c) => {
       raidBis:       u.raidBis,       raidBisItemId: u.raidBisItemId,
       trueBis:       u.trueBis,       trueBisItemId: u.trueBisItemId,
     }));
-    await updateDefaultBisOverrides(writes);
+    await updateDefaultBisOverrides(db, writes);
 
-    // Invalidate worn BIS for all characters whose effective BIS for these slots came
-    // from spec defaults (i.e. they have no personal approved submission for the slot).
-    // Must cover all teams since default BIS is global.
+    // Invalidate worn BIS across all teams for chars using spec defaults for these slots
     const changedSlots = new Set(writes.map(w => w.slot));
-    const allTeams     = getAllTeams();
+    const allTeams     = await getAllTeams(db);
     await Promise.all(allTeams.map(async team => {
       const [roster, subs] = await Promise.all([
-        getRoster(team.sheetId),
-        getBisSubmissions(team.sheetId),
+        getRoster(db, team.id),
+        getBisSubmissions(db, team.id),
       ]);
-      // Build set of charId+slot pairs that have a personal approved submission
       const personalApproved = new Set(
         subs
-          .filter(s => s.status === 'Approved' && s.charId && changedSlots.has(s.slot))
-          .map(s => `${s.charId}:${s.slot}`),
+          .filter(s => s.status === 'Approved' && s.char_id && changedSlots.has(s.slot))
+          .map(s => `${s.char_id}:${s.slot}`),
       );
       const targets = [];
       for (const char of roster) {
-        if (!char.charId) continue;
         if (toCanonical(char.spec) !== canonicalSpec) continue;
         for (const slot of changedSlots) {
-          if (!personalApproved.has(`${char.charId}:${slot}`)) {
-            targets.push({ charId: char.charId, slot });
+          if (!personalApproved.has(`${char.id}:${slot}`)) {
+            targets.push({ charId: char.id, slot });
           }
         }
       }
-      if (targets.length) await invalidateWornBisSlots(team.sheetId, targets);
+      if (targets.length) await invalidateWornBisSlots(db, team.id, targets);
     }));
 
     return c.json({ ok: true, updated: writes.length });
@@ -207,11 +195,10 @@ router.post('/default-bis', requireGlobalOfficer, async (c) => {
 router.post('/spec-bis-source', requireGlobalOfficer, async (c) => {
   const { spec, source } = await c.req.json();
   if (!spec || !source) return c.json({ error: 'spec and source are required' }, 400);
-  const { teamSheetId } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  const db = c.env.DB;
   try {
     const canonicalSpec = toCanonical(spec);
-    await setSpecBisSource(canonicalSpec, source);
+    await setSpecBisSource(db, canonicalSpec, source);
     return c.json({ ok: true, spec: canonicalSpec, source });
   } catch (err) {
     console.error('[ADMIN] spec-bis-source POST error:', err);
@@ -226,11 +213,12 @@ router.get('/specs', requireGlobalOfficer, (c) => c.json(CLASS_SPECS));
 // ── GET /api/admin/bis-review ──────────────────────────────────────────────────
 
 router.get('/bis-review', requireOfficer, async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  const { teamId } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team configured' }, 400);
+  const db = c.env.DB;
   try {
     const [allSubmissions, itemDb, effectiveDefaults, roster] = await Promise.all([
-      getBisSubmissions(teamSheetId), getItemDb(), getEffectiveDefaultBis(), getRoster(teamSheetId),
+      getBisSubmissions(db, teamId), getItemDb(db), getEffectiveDefaultBis(db), getRoster(db, teamId),
     ]);
 
     const itemByName = new Map(itemDb.map(i => [i.name.toLowerCase(), i]));
@@ -238,25 +226,20 @@ router.get('/bis-review', requireOfficer, async (c) => {
       if (!name) return null;
       const item = itemByName.get(name.toLowerCase());
       if (!item) return null;
-      return { itemId: String(item.itemId ?? ''), difficulty: item.difficulty ?? '', sourceType: item.sourceType ?? '', sourceName: item.sourceName ?? '' };
+      return { itemId: String(item.item_id ?? ''), difficulty: item.difficulty ?? '', sourceType: item.source_type ?? '', sourceName: item.source_name ?? '' };
     };
 
-    // Build specDefaultByKey from effective defaults (seed rows + officer overrides, preferred source).
-    // Uses getEffectiveDefaultBis() so any Raid BIS set via the admin page is reflected here.
     const specDefaultByKey = new Map();
     for (const row of applyRaidBisInference(effectiveDefaults, itemDb)) {
-      if (!row.trueBis) continue;
+      if (!row.true_bis) continue;
       const canonSpec = toCanonical(row.spec);
-      specDefaultByKey.set(canonSpec + '::' + row.slot, { trueBis: row.trueBis ?? '', raidBis: row.raidBis ?? '', source: row.source ?? '' });
+      specDefaultByKey.set(canonSpec + '::' + row.slot, { trueBis: row.true_bis ?? '', raidBis: row.raid_bis ?? '', source: row.source ?? '' });
     }
 
     const approvedByKey = new Map();
     for (const s of allSubmissions) {
       if (s.status !== 'Approved') continue;
-      // Key includes spec so multi-spec characters get the correct current value per spec.
-      // Use charName (always populated) rather than charId to avoid mismatches when charId
-      // isn't consistently present across approved vs pending rows.
-      approvedByKey.set(s.charName + '::' + (s.spec ?? '') + '::' + s.slot, { trueBis: s.trueBis ?? '', raidBis: s.raidBis ?? '' });
+      approvedByKey.set(s.char_name + '::' + (s.spec ?? '') + '::' + s.slot, { trueBis: s.true_bis ?? '', raidBis: s.raid_bis ?? '' });
     }
 
     const resolveCurrent = (charName, spec, slot) => {
@@ -270,28 +253,28 @@ router.get('/bis-review', requireOfficer, async (c) => {
     const pending  = allSubmissions.filter(s => s.status === 'Pending');
     const groupMap = new Map();
     for (const s of pending) {
-      if (!groupMap.has(s.charName)) groupMap.set(s.charName, { charName: s.charName, spec: s.spec, submissions: [] });
-      const current = resolveCurrent(s.charName, s.spec, s.slot);
-      groupMap.get(s.charName).submissions.push({
+      if (!groupMap.has(s.char_name)) groupMap.set(s.char_name, { charName: s.char_name, spec: s.spec, submissions: [] });
+      const current = resolveCurrent(s.char_name, s.spec, s.slot);
+      groupMap.get(s.char_name).submissions.push({
         id: s.id, slot: s.slot,
         current: current ? {
           trueBis: current.trueBis, trueBisSource: resolveSource(current.trueBis),
           raidBis: current.raidBis, raidBisSource: resolveSource(current.raidBis),
           isDefault: current.isDefault, defaultSource: current.defaultSource,
         } : null,
-        trueBis: s.trueBis, trueBisSource: resolveSource(s.trueBis),
-        raidBis: s.raidBis, raidBisSource: resolveSource(s.raidBis),
-        rationale: s.rationale, submittedAt: s.submittedAt,
+        trueBis: s.true_bis, trueBisSource: resolveSource(s.true_bis),
+        raidBis: s.raid_bis, raidBisSource: resolveSource(s.raid_bis),
+        rationale: s.rationale, submittedAt: s.submitted_at,
       });
     }
-    // Spec change requests — characters with a pending primary spec change
+
     const specChangeRequests = roster
-      .filter(r => r.pendingPrimarySpec)
+      .filter(r => r.pending_primary_spec)
       .map(r => ({
-        charName:     r.charName,
-        charId:       r.charId,
+        charName:     r.char_name,
+        charId:       r.id,
         currentSpec:  r.spec,
-        requestedSpec: r.pendingPrimarySpec,
+        requestedSpec: r.pending_primary_spec,
       }));
 
     return c.json({ pending: pending.length, groups: [...groupMap.values()], specChangeRequests });
@@ -306,18 +289,17 @@ router.get('/bis-review', requireOfficer, async (c) => {
 router.post('/bis-review/approve', requireOfficer, async (c) => {
   const { id } = await c.req.json();
   if (!id) return c.json({ error: 'id is required' }, 400);
-  const { teamSheetId, charName: officerChar, username } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  const { teamId, charName: officerChar, username } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team configured' }, 400);
+  const db = c.env.DB;
   try {
-    // Look up the submission before approving so we can invalidate worn BIS for this slot
-    const subs = await getBisSubmissions(teamSheetId);
+    const subs = await getBisSubmissions(db, teamId);
     const sub  = subs.find(s => s.id === id);
 
-    await approveBisSubmission(teamSheetId, id, officerChar ?? username ?? 'Officer');
+    await approveBisSubmission(db, id, officerChar ?? username ?? 'Officer');
 
-    // Invalidate worn BIS for this character+slot — the BIS definition has changed
-    if (sub?.charId && sub?.slot) {
-      await invalidateWornBisSlots(teamSheetId, [{ charId: sub.charId, slot: sub.slot }]);
+    if (sub?.char_id && sub?.slot) {
+      await invalidateWornBisSlots(db, teamId, [{ charId: sub.char_id, slot: sub.slot }]);
     }
 
     return c.json({ ok: true });
@@ -332,10 +314,11 @@ router.post('/bis-review/approve', requireOfficer, async (c) => {
 router.post('/bis-review/reject', requireOfficer, async (c) => {
   const { id, officerNote = '' } = await c.req.json();
   if (!id) return c.json({ error: 'id is required' }, 400);
-  const { teamSheetId, charName: officerChar, username } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  const { teamId, charName: officerChar, username } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team configured' }, 400);
+  const db = c.env.DB;
   try {
-    await rejectBisSubmission(teamSheetId, id, officerChar ?? username ?? 'Officer', officerNote);
+    await rejectBisSubmission(db, id, officerChar ?? username ?? 'Officer', officerNote);
     return c.json({ ok: true });
   } catch (err) {
     console.error('[ADMIN] bis-review reject error:', err);
@@ -344,20 +327,18 @@ router.post('/bis-review/reject', requireOfficer, async (c) => {
 });
 
 // ── POST /api/admin/bis-review/spec-change ─────────────────────────────────────
-// Officer approves or rejects a pending primary spec change request.
 
 router.post('/bis-review/spec-change', requireOfficer, async (c) => {
   const { charId, approve } = await c.req.json();
   if (!charId)           return c.json({ error: 'charId is required' }, 400);
   if (approve === undefined) return c.json({ error: 'approve (bool) is required' }, 400);
-  const { teamSheetId } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  const db = c.env.DB;
   try {
     if (approve) {
-      const { oldSpec, newSpec } = await approvePrimarySpecChange(teamSheetId, charId);
-      return c.json({ ok: true, oldSpec, newSpec });
+      await approvePrimarySpecChange(db, charId);
+      return c.json({ ok: true });
     } else {
-      await rejectPrimarySpecChange(teamSheetId, charId);
+      await rejectPrimarySpecChange(db, charId);
       return c.json({ ok: true });
     }
   } catch (err) {
@@ -367,11 +348,14 @@ router.post('/bis-review/spec-change', requireOfficer, async (c) => {
 });
 
 // ── WCL sync (manual trigger) ─────────────────────────────────────────────────
+// NOTE: wcl-sync.js has not yet been migrated to D1. These routes will work once
+// wcl-sync.js is updated to accept a db parameter.
 
 router.get('/wcl-status', requireOfficer, async (c) => {
-  const { teamSheetId } = c.get('session').user;
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
   try {
-    const config = await getConfig(teamSheetId);
+    const config = await getTeamConfig(db, teamId);
     const lastCheck = Number(config.wcl_last_check) || null;
     return c.json({ lastCheck });
   } catch (err) {
@@ -380,11 +364,13 @@ router.get('/wcl-status', requireOfficer, async (c) => {
 });
 
 router.post('/wcl-sync', requireOfficer, async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const team = getAllTeams().find(t => t.sheetId === teamSheetId);
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
+  const allTeams = await getAllTeams(db);
+  const team = allTeams.find(t => t.id === teamId);
   if (!team) return c.json({ error: 'Team not found' }, 404);
   try {
-    await runWclSyncForTeam(team);
+    await runWclSyncForTeam(db, team);
     return c.json({ ok: true });
   } catch (err) {
     console.error('[admin] WCL sync error:', err);
@@ -393,11 +379,13 @@ router.post('/wcl-sync', requireOfficer, async (c) => {
 });
 
 router.post('/wcl-sync-worn-bis', requireOfficer, async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const team = getAllTeams().find(t => t.sheetId === teamSheetId);
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
+  const allTeams = await getAllTeams(db);
+  const team = allTeams.find(t => t.id === teamId);
   if (!team) return c.json({ error: 'Team not found' }, 404);
   try {
-    await runWclSyncWornBisOnly(team);
+    await runWclSyncWornBisOnly(db, team);
     return c.json({ ok: true });
   } catch (err) {
     console.error('[admin] WCL worn BIS resync error:', err);
@@ -405,13 +393,94 @@ router.post('/wcl-sync-worn-bis', requireOfficer, async (c) => {
   }
 });
 
+// ── Team Config ───────────────────────────────────────────────────────────────
+
+router.get('/team-config', requireOfficer, async (c) => {
+  const { teamId } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team configured' }, 400);
+  const db = c.env.DB;
+  try {
+    const config = await getTeamConfig(db, teamId);
+    return c.json({ config });
+  } catch (err) {
+    return c.json({ error: err.message ?? 'Failed to load config' }, 500);
+  }
+});
+
+router.post('/team-config', requireOfficer, async (c) => {
+  const { teamId } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team configured' }, 400);
+  const db = c.env.DB;
+  const { key, value } = await c.req.json();
+  if (!key) return c.json({ error: 'key is required' }, 400);
+  try {
+    await setTeamConfigValue(db, teamId, key, value ?? '');
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: err.message ?? 'Failed to save config' }, 500);
+  }
+});
+
+// ── RCLC Response Map ─────────────────────────────────────────────────────────
+
+router.get('/rclc-map', requireOfficer, async (c) => {
+  const { teamId } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team configured' }, 400);
+  const db = c.env.DB;
+  try {
+    const entries = await getRclcResponseMapRows(db, teamId);
+    return c.json({ entries });
+  } catch (err) {
+    return c.json({ error: err.message ?? 'Failed to load RCLC map' }, 500);
+  }
+});
+
+router.post('/rclc-map', requireOfficer, async (c) => {
+  const { teamId } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team configured' }, 400);
+  const db = c.env.DB;
+  const { entries } = await c.req.json();
+  if (!Array.isArray(entries)) return c.json({ error: 'entries must be an array' }, 400);
+  try {
+    await setRclcResponseMap(db, teamId, entries);
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: err.message ?? 'Failed to save RCLC map' }, 500);
+  }
+});
+
+// ── Global Config ─────────────────────────────────────────────────────────────
+
+router.get('/global-config', requireOfficer, async (c) => {
+  const db = c.env.DB;
+  try {
+    const config = await getGlobalConfig(db);
+    return c.json({ config });
+  } catch (err) {
+    return c.json({ error: err.message ?? 'Failed to load global config' }, 500);
+  }
+});
+
+router.post('/global-config', requireOfficer, async (c) => {
+  const db = c.env.DB;
+  const { key, value } = await c.req.json();
+  if (!key) return c.json({ error: 'key is required' }, 400);
+  try {
+    await setGlobalConfigValue(db, key, value ?? '');
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: err.message ?? 'Failed to save global config' }, 500);
+  }
+});
+
 // ── DELETE /api/admin/worn-bis ─────────────────────────────────────────────────
 
 router.delete('/worn-bis', requireOfficer, async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team sheet configured' }, 400);
+  const { teamId } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team configured' }, 400);
+  const db = c.env.DB;
   try {
-    await clearWornBis(teamSheetId);
+    await clearWornBis(db, teamId);
     return c.json({ ok: true });
   } catch (err) {
     console.error('[admin] worn-bis reset error:', err);

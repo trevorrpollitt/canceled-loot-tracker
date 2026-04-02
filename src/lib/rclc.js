@@ -234,7 +234,7 @@ export function buildLootEntries(rows, roster, responseMap, existingKeys) {
     }
 
     const recipientId    = rosterEntry?.ownerId ?? '';
-    const recipientCharId = rosterEntry?.charId  ?? '';
+    const recipientCharId = rosterEntry?.charId  ?? null;
 
     entries.push({
       id:              randomUUID(),

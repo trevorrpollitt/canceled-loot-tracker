@@ -7,8 +7,7 @@
  */
 
 import { Hono } from 'hono';
-import { getAllTeams } from '../../../lib/teams.js';
-import { getRoster, getGlobalConfig } from '../../../lib/sheets.js';
+import { getAllTeams, getTeamConfig, getRoster, getGlobalConfig } from '../../../lib/db.js';
 import { log } from '../../../lib/logger.js';
 
 const router      = new Hono();
@@ -65,12 +64,12 @@ router.get('/callback', async (c) => {
     log.verbose(`[auth] Discord user: id=${discordUser.id} username=${discordUser.username}`);
 
     // 3. Fetch guild roles first — needed to determine officer status before building the teams list.
-    //    guild_id and global_officer_role_id come from the master sheet Global Config.
+    const db = c.env.DB;
     let guildRoles         = [];
     let globalOfficerRoles = [];
     let isGlobalOfficer    = false;
     try {
-      const globalConfig = await getGlobalConfig();
+      const globalConfig = await getGlobalConfig(db);
       const guildId      = globalConfig.guild_id || null;
       globalOfficerRoles = (globalConfig.global_officer_role_id || '')
         .split('|').map(s => s.trim()).filter(Boolean);
@@ -96,24 +95,24 @@ router.get('/callback', async (c) => {
     //    - has characters on the team roster, OR
     //    - holds the team's officer Discord role (characterless officers), OR
     //    - is a global officer (gets access to every team regardless of characters)
+    const allTeams = await getAllTeams(db);
     const userTeams = [];
-    for (const team of getAllTeams()) {
-      const roster          = await getRoster(team.sheetId);
-      const chars           = roster.filter(ch => ch.ownerId === discordUser.id);
-      const isOfficerOnTeam = team.officerRoleIds.some(id => guildRoles.includes(id));
+    for (const team of allTeams) {
+      const [roster, config]  = await Promise.all([getRoster(db, team.id), getTeamConfig(db, team.id)]);
+      const officerRoleIds    = (config.officer_role_id || '').split('|').filter(Boolean);
+      const chars             = roster.filter(ch => ch.owner_id === discordUser.id);
+      const isOfficerOnTeam   = officerRoleIds.some(id => guildRoles.includes(id));
       if (chars.length || isOfficerOnTeam || isGlobalOfficer) {
-        userTeams.push({ team, chars });
+        userTeams.push({ team, chars, officerRoleIds });
       }
     }
 
     // 5. Build the teams array with per-team officer status.
-    //    officerRoleIds are already loaded into the in-memory team object by initTeams().
-    //    Global officers are officers on every team they appear in.
-    const teams = userTeams.map(({ team, chars }) => ({
-      teamName:    team.name,
-      teamSheetId: team.sheetId,
-      isOfficer:   isGlobalOfficer || team.officerRoleIds.some(id => guildRoles.includes(id)),
-      chars:       chars.map(ch => ({ charId: ch.charId, charName: ch.charName, spec: ch.spec, role: ch.role, status: ch.status })),
+    const teams = userTeams.map(({ team, chars, officerRoleIds }) => ({
+      teamName: team.name,
+      teamId:   team.id,
+      isOfficer: isGlobalOfficer || officerRoleIds.some(id => guildRoles.includes(id)),
+      chars:    chars.map(ch => ({ charId: ch.id, charName: ch.char_name, spec: ch.spec, role: ch.role, status: ch.status })),
     }));
 
     // 6. Active team defaults to first match; active character to first char in that team.
@@ -131,16 +130,16 @@ router.get('/callback', async (c) => {
       id:          discordUser.id,
       username:    discordUser.username,
       avatar:      discordUser.avatar,
-      teamName:    activeTeam?.teamName    ?? null,
-      teamSheetId: activeTeam?.teamSheetId ?? null,
-      charId:      activeChar?.charId      ?? null,
-      charName:    activeChar?.charName    ?? null,
-      spec:        activeChar?.spec        ?? null,
-      role:        activeChar?.role        ?? null,
-      status:      activeChar?.status      ?? null,
-      isOfficer:       activeTeam?.isOfficer ?? false,
+      teamName:    activeTeam?.teamName ?? null,
+      teamId:      activeTeam?.teamId   ?? null,
+      charId:      activeChar?.charId   ?? null,
+      charName:    activeChar?.charName ?? null,
+      spec:        activeChar?.spec     ?? null,
+      role:        activeChar?.role     ?? null,
+      status:      activeChar?.status   ?? null,
+      isOfficer:       activeTeam?.isOfficer   ?? false,
       isGlobalOfficer: isGlobalOfficer,
-      chars:           activeTeam?.chars    ?? [],
+      chars:           activeTeam?.chars ?? [],
       teams,
     };
 

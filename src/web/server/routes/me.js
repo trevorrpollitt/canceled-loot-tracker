@@ -60,9 +60,9 @@ router.post('/active-team', requireAuth, async (c) => {
 
   const activeChar = target.chars[0] ?? null;
 
-  session.user.teamName    = target.teamName;
-  session.user.teamSheetId = target.teamSheetId;
-  session.user.isOfficer   = target.isOfficer;
+  session.user.teamName  = target.teamName;
+  session.user.teamId    = target.teamId;
+  session.user.isOfficer = target.isOfficer;
   session.user.chars       = target.chars;
   session.user.charId      = activeChar?.charId   ?? null;
   session.user.charName    = activeChar?.charName ?? null;

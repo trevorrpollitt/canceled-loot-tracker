@@ -50,16 +50,14 @@ function parseSheetDateMs(value) {
   const ms = new Date(String(value)).getTime();
   return isNaN(ms) ? 0 : ms;
 }
-import { getAllTeams } from './teams.js';
+import { getAllTeams, initTeams } from './teams.js';
 import {
   getGlobalConfig,
-  getConfig,
-  setConfigValue,
+  getTeamConfig,
+  setTeamConfigValue,
   getTierItems,
   getRoster,
-  getRaids,
   upsertRaids,
-  getRaidEncounters,
   upsertRaidEncounters,
   upsertTierSnapshot,
   getBisSubmissions,
@@ -67,7 +65,7 @@ import {
   getItemDb,
   getWornBis,
   upsertWornBis,
-} from './sheets.js';
+} from './db.js';
 import {
   getValidEncounterIds,
   getReportsForGuild,
@@ -121,9 +119,9 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
     const specFromEvent = event.specID ? WOW_SPEC_ID_TO_NAME[event.specID] : undefined;
     const charSpec      = specFromEvent ?? char.spec;
 
-    // bisLookup is keyed as charId:spec (all specs) or "name:<charName>" fallback for primary
-    const bisKey     = char.charId ? `${char.charId}:${charSpec}` : `name:${char.charName.toLowerCase()}`;
-    const charBisMap = bisLookup.get(bisKey) ?? bisLookup.get(`name:${char.charName.toLowerCase()}`);
+    // bisLookup is keyed as id:spec (all specs) or "name:<char_name>" fallback for primary
+    const bisKey     = char.id ? `${char.id}:${charSpec}` : `name:${char.char_name.toLowerCase()}`;
+    const charBisMap = bisLookup.get(bisKey) ?? bisLookup.get(`name:${char.char_name.toLowerCase()}`);
 
     for (const [slotIdx, slotName] of Object.entries(WCL_SLOT_MAP)) {
       const gearItem = (event.gear ?? [])[Number(slotIdx)];
@@ -139,7 +137,7 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
         : undefined;
       const isCrafted = matchedCraftedId !== undefined;
       if (rawTrack === 'Unknown') {
-        log.verbose(`[worn-bis] ${char.charName} slot ${slotName} item ${gearItem.id}: Unknown track — bonusIDs=[${(gearItem.bonusIDs ?? []).join(',')}] isCrafted=${isCrafted}${isCrafted ? ` (matched ${matchedCraftedId})` : ''}`);
+        log.verbose(`[worn-bis] ${char.char_name} slot ${slotName} item ${gearItem.id}: Unknown track — bonusIDs=[${(gearItem.bonusIDs ?? []).join(',')}] isCrafted=${isCrafted}${isCrafted ? ` (matched ${matchedCraftedId})` : ''}`);
         if (!isCrafted) continue;
       }
 
@@ -175,8 +173,8 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
         matchedAnyBis = true;
 
         const recordTrack = isCrafted ? 'Crafted' : rawTrack;
-        const key  = `${char.charId}:${charSpec}:${bisSlot}`;
-        const prev = result.get(key) ?? { charId: char.charId, charName: char.charName, spec: charSpec, slot: bisSlot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+        const key  = `${char.id}:${charSpec}:${bisSlot}`;
+        const prev = result.get(key) ?? { charId: char.id, charName: char.char_name, spec: charSpec, slot: bisSlot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
         result.set(key, {
           ...prev,
           overallBISTrack: matchesOverall ? mergeTrack(prev.overallBISTrack, recordTrack) : prev.overallBISTrack,
@@ -190,8 +188,8 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
       // Crafted items (Unknown track) get 'Crafted' so the row still exists — name-based
       // BIS matching is impossible without the item name, which WCL gear data omits.
       if (!matchedAnyBis) {
-        const key      = `${char.charId}:${charSpec}:${slotName}`;
-        const prev     = result.get(key) ?? { charId: char.charId, charName: char.charName, spec: charSpec, slot: slotName, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+        const key      = `${char.id}:${charSpec}:${slotName}`;
+        const prev     = result.get(key) ?? { charId: char.id, charName: char.char_name, spec: charSpec, slot: slotName, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
         const otherVal = isCrafted ? 'Crafted' : rawTrack;
         result.set(key, { ...prev, otherTrack: mergeTrack(prev.otherTrack, otherVal) });
       }
@@ -239,8 +237,8 @@ function findTierPieces(gear, tierItemMap, trackRanges) {
 function buildRosterLookup(roster) {
   const map = new Map();
   for (const char of roster) {
-    const nameServer = `${char.charName.toLowerCase()}|${(char.server ?? '').toLowerCase()}`;
-    const nameOnly   = `${char.charName.toLowerCase()}|`;
+    const nameServer = `${char.char_name.toLowerCase()}|${(char.server ?? '').toLowerCase()}`;
+    const nameOnly   = `${char.char_name.toLowerCase()}|`;
     map.set(nameServer, char);
     // Only set name-only key if not already claimed by a char with a server
     if (!map.has(nameOnly)) map.set(nameOnly, char);
@@ -264,8 +262,8 @@ function resolveActor(actor, rosterLookup) {
  * Build shared WCL sync context (global config, encounter IDs, tier items).
  * Throws if credentials or zone IDs are missing.
  */
-async function buildWclContext() {
-  const globalConfig = await getGlobalConfig();
+async function buildWclContext(db) {
+  const globalConfig = await getGlobalConfig(db);
   const { wcl_client_id, wcl_zone_ids, season_start, wcl_veteran_bonus_id, wcl_crafted_bonus_ids } = globalConfig;
   const trackRanges      = buildTrackRanges(Number(wcl_veteran_bonus_id) || 0);
   // Pipe-separated list of bonus IDs that identify crafted items, e.g. "9481|9513|9484"
@@ -291,17 +289,17 @@ async function buildWclContext() {
   }
   log.verbose(`[wcl-sync] Valid encounter IDs: [${[...validEncounterIds].join(', ')}]`);
 
-  const tierItemRows     = await getTierItems();
+  const tierItemRows     = await getTierItems(db);
   const tierItemsByClass = new Map();
-  for (const { class: cls, slot, itemId } of tierItemRows) {
+  for (const { class: cls, slot, item_id } of tierItemRows) {
     if (!tierItemsByClass.has(cls)) tierItemsByClass.set(cls, new Map());
-    tierItemsByClass.get(cls).set(Number(itemId), slot);
+    tierItemsByClass.get(cls).set(Number(item_id), slot);
   }
 
-  const itemDbRows = await getItemDb();
+  const itemDbRows = await getItemDb(db);
   const itemDbMap  = new Map();
   for (const row of itemDbRows) {
-    itemDbMap.set(Number(row.itemId), { slot: row.slot, armorType: row.armorType, isTierToken: row.isTierToken, name: row.name });
+    itemDbMap.set(Number(row.item_id), { slot: row.slot, armorType: row.armor_type, isTierToken: row.is_tier_token === 1, name: row.name });
   }
 
   return { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap };
@@ -310,12 +308,18 @@ async function buildWclContext() {
 /**
  * Run a full WCL sync across all configured teams.
  * Called by the Cloudflare Worker `scheduled` handler.
+ *
+ * @param {object} db  D1 database binding (env.DB from the Worker)
  */
-export async function runWclSync() {
+export async function runWclSync(db) {
   log.verbose('[wcl-sync] Starting sync run');
+
+  // Populate the in-memory team registry from D1 before iterating teams.
+  await initTeams(db);
+
   let ctx;
   try {
-    ctx = await buildWclContext();
+    ctx = await buildWclContext(db);
   } catch (err) {
     log.error('[wcl-sync] Setup failed:', err.message);
     return;
@@ -324,7 +328,7 @@ export async function runWclSync() {
 
   for (const team of getAllTeams()) {
     try {
-      await syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap);
+      await syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap);
     } catch (err) {
       log.error(`[wcl-sync] Team "${team.name}" sync failed:`, err.message);
     }
@@ -336,21 +340,22 @@ export async function runWclSync() {
  * Run WCL sync for a single team.
  * Called by the web admin manual trigger.
  *
- * @param {{ name: string, sheetId: string }} team
+ * @param {object} db  D1 database binding
+ * @param {{ id: number, name: string }} team
  */
-export async function runWclSyncForTeam(team) {
+export async function runWclSyncForTeam(db, team) {
   log.warn(`[wcl-sync] Manual sync triggered for team "${team.name}"`);
-  const ctx = await buildWclContext();
+  const ctx = await buildWclContext(db);
   const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap } = ctx;
-  await syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap);
+  await syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap);
   log.warn(`[wcl-sync] Manual sync complete for team "${team.name}"`);
 }
 
-export async function runWclSyncWornBisOnly(team) {
+export async function runWclSyncWornBisOnly(db, team) {
   log.warn(`[wcl-sync] Worn BIS-only resync triggered for team "${team.name}"`);
-  const ctx = await buildWclContext();
+  const ctx = await buildWclContext(db);
   const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap } = ctx;
-  await syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap, { wornBisOnly: true });
+  await syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap, { wornBisOnly: true });
   log.warn(`[wcl-sync] Worn BIS-only resync complete for team "${team.name}"`);
 }
 
@@ -358,9 +363,9 @@ export async function runWclSyncWornBisOnly(team) {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, clientId, clientSecret, itemDbMap, options = {}) {
+async function syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, clientId, clientSecret, itemDbMap, options = {}) {
   const { wornBisOnly = false } = options;
-  const config     = await getConfig(team.sheetId);
+  const config     = await getTeamConfig(db, team.id);
   const wclGuildId = config.wcl_guild_id ? Number(config.wcl_guild_id) : null;
 
   if (!wclGuildId) {
@@ -412,18 +417,18 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
   }
 
   if (!allReports.length) {
-    await setConfigValue(team.sheetId, 'wcl_last_check', String(Date.now()));
+    await setTeamConfigValue(db, team.id, 'wcl_last_check', String(Date.now()));
     return;
   }
 
-  const roster       = await getRoster(team.sheetId);
+  const roster       = await getRoster(db, team.id);
   const rosterLookup = buildRosterLookup(roster);
 
   // Build BIS lookup per character: effective BIS = personal approved submission > spec default.
-  // Keyed by charId when present; falls back to "name:<charName>" for un-migrated rows.
+  // Keyed by roster id:spec when present; falls back to "name:<char_name>" for legacy rows.
   const [allSubs, effectiveDefaultBis] = await Promise.all([
-    getBisSubmissions(team.sheetId),
-    getEffectiveDefaultBis(),
+    getBisSubmissions(db, team.id),
+    getEffectiveDefaultBis(db),
   ]);
 
   // Group defaults by spec for fast lookup
@@ -433,34 +438,31 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
     defaultBisBySpec.get(row.spec).push(row);
   }
 
-  // Build BIS lookup per character per spec: keyed as "charId:spec" covering all specs.
-  // Falls back to "name:<charName>" for the primary spec of un-migrated (no charId) rows.
+  // Build BIS lookup per character per spec: keyed as "id:spec" covering all specs.
   const bisLookup = new Map();
   for (const char of roster) {
     const charSpecs = getCharSpecs(char); // { primary, secondary[], all[] }
     const charSubs  = allSubs.filter(s =>
       s.status === 'Approved' &&
-      (char.charId && s.charId ? s.charId === char.charId : s.charName.toLowerCase() === char.charName.toLowerCase())
+      (char.id && s.char_id ? s.char_id === char.id : s.char_name.toLowerCase() === char.char_name.toLowerCase())
     );
 
     for (const spec of charSpecs.all) {
       const slots = new Map();
       // Seed from spec defaults for this spec
       for (const row of defaultBisBySpec.get(toCanonical(spec)) ?? []) {
-        slots.set(row.slot, { trueBis: row.trueBis, trueBisItemId: row.trueBisItemId, raidBis: row.raidBis, raidBisItemId: row.raidBisItemId });
+        slots.set(row.slot, { trueBis: row.true_bis, trueBisItemId: row.true_bis_item_id, raidBis: row.raid_bis, raidBisItemId: row.raid_bis_item_id });
       }
       // Override with personal approved submissions for this spec
       const specSubs = charSubs.filter(s => s.spec ? s.spec === spec : spec === charSpecs.primary);
       for (const sub of specSubs) {
-        slots.set(sub.slot, { trueBis: sub.trueBis, trueBisItemId: sub.trueBisItemId, raidBis: sub.raidBis, raidBisItemId: sub.raidBisItemId });
+        slots.set(sub.slot, { trueBis: sub.true_bis, trueBisItemId: sub.true_bis_item_id, raidBis: sub.raid_bis, raidBisItemId: sub.raid_bis_item_id });
       }
-      if (char.charId) bisLookup.set(`${char.charId}:${spec}`, slots);
+      bisLookup.set(`${char.id}:${spec}`, slots);
     }
-    // Fallback key for primary spec on un-migrated characters (no charId)
-    if (!char.charId) bisLookup.set(`name:${char.charName.toLowerCase()}`, bisLookup.get(`${char.charId}:${charSpecs.primary}`) ?? new Map());
   }
 
-  const existingWornBis = await getWornBis(team.sheetId); // Map<charId:slot, row>
+  const existingWornBis = await getWornBis(db, team.id); // Map<char_id:spec:slot, row>
 
   // Accumulate data from all reports before writing — reduces Sheets API calls from
   // O(reports × characters) to O(1 read + 1 batchUpdate) per tab per team sync.
@@ -530,43 +532,44 @@ async function syncTeam(team, globalConfig, validEncounterIds, tierItemsByClass,
     }
   }
 
-  // Bulk-write all accumulated data (one read + one batchUpdate per tab)
+  // Bulk-write all accumulated data
   const snapshotList = [...allSnapshots.values()];
   if (!wornBisOnly) {
     if (snapshotList.length) {
       log.warn(`[wcl-sync] Team "${team.name}": writing ${snapshotList.length} tier snapshot row(s)`);
-      await upsertTierSnapshot(team.sheetId, snapshotList);
+      await upsertTierSnapshot(db, team.id, snapshotList);
     }
     if (allRaidRows.length) {
       log.warn(`[wcl-sync] Team "${team.name}": writing ${allRaidRows.length} raid row(s)`);
-      await upsertRaids(team.sheetId, allRaidRows);
+      await upsertRaids(db, team.id, allRaidRows);
     }
     if (allEncounterRows.length) {
       log.warn(`[wcl-sync] Team "${team.name}": writing ${allEncounterRows.length} encounter row(s)`);
-      await upsertRaidEncounters(team.sheetId, allEncounterRows);
+      await upsertRaidEncounters(db, team.id, allEncounterRows);
     }
   }
 
-  // Merge accumulated worn BIS with existing sheet data (best-ever logic), then write
+  // Merge accumulated worn BIS with existing DB data (best-ever logic), then write
   if (allWornBis.size) {
     const wornBisToWrite = [];
     for (const [key, row] of allWornBis) {
       const existing = existingWornBis.get(key);
       wornBisToWrite.push({
         ...row,
-        overallBISTrack: mergeTrack(existing?.overallBISTrack, row.overallBISTrack),
-        raidBISTrack:    mergeTrack(existing?.raidBISTrack, row.raidBISTrack),
-        otherTrack:      mergeTrack(existing?.otherTrack, row.otherTrack),
+        updatedAt:       new Date().toISOString(),
+        overallBISTrack: mergeTrack(existing?.overall_bis_track, row.overallBISTrack),
+        raidBISTrack:    mergeTrack(existing?.raid_bis_track,    row.raidBISTrack),
+        otherTrack:      mergeTrack(existing?.other_track,       row.otherTrack),
       });
     }
     log.warn(`[wcl-sync] Team "${team.name}": writing ${wornBisToWrite.length} worn BIS row(s)`);
-    await upsertWornBis(team.sheetId, wornBisToWrite);
+    await upsertWornBis(db, team.id, wornBisToWrite);
   }
 
   if (!wornBisOnly) {
     // Advance cursor; persist pending re-checks (reports < 24h old)
-    await setConfigValue(team.sheetId, 'wcl_last_check', String(Date.now()));
-    await setConfigValue(team.sheetId, 'wcl_pending_reports',
+    await setTeamConfigValue(db, team.id, 'wcl_last_check', String(Date.now()));
+    await setTeamConfigValue(db, team.id, 'wcl_pending_reports',
       [...newPending.entries()].map(([code, d]) => `${code}:${d.startTime}:${d.storedEndTime}:${d.zoneName}`).join('|'),
     );
   }
@@ -613,8 +616,8 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
     const tierPieces  = findTierPieces(event.gear, tierItemMap, trackRanges);
 
     snapshotRows.push({
-      charId:     char.charId,
-      charName:   char.charName,
+      charId:     char.id,
+      charName:   char.char_name,
       raidId:     report.code,
       tierCount:  tierPieces.length,
       tierDetail: tierPieces.map(p => `${p.slot}:${p.track}`).join('|'),
@@ -652,9 +655,9 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
     const actor = actors.find(a => a.id === event.sourceID);
     if (!actor) continue;
     const char = resolveActor(actor, rosterLookup);
-    if (!char || !char.charId) continue;
+    if (!char || !char.id) continue;
     const specFromEvent = event.specID ? WOW_SPEC_ID_TO_NAME[event.specID] : undefined;
-    specByCharId.set(char.charId, specFromEvent ?? char.spec); // overwrite = last boss wins
+    specByCharId.set(char.id, specFromEvent ?? char.spec); // overwrite = last boss wins
   }
 
   const wornBisRows = extractWornBis(wornBisCombatantEvents, actors, rosterLookup, bisLookup ?? new Map(), itemDbMap ?? new Map(), trackRanges, craftedBonusIds ?? new Set());
@@ -707,7 +710,7 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
       .map(event => {
         const actor = actors.find(a => a.id === event.sourceID);
         if (!actor) return null;
-        return resolveActor(actor, rosterLookup)?.ownerId ?? null;
+        return resolveActor(actor, rosterLookup)?.owner_id ?? null;
       })
       .filter(Boolean),
   )];

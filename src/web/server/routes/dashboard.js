@@ -6,67 +6,77 @@
 
 import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
-import { getLootLog, getBisSubmissions, getEffectiveDefaultBis, getItemDb, applyRaidBisInference, getWornBis, primeTeamCache, getRoster, getGlobalConfig, getTierItems, upsertWornBis, upsertTierSnapshot } from '../../../lib/sheets.js';
+import {
+  getLootLog, getBisSubmissions, getEffectiveDefaultBis, getItemDb,
+  getWornBis, getRoster, getGlobalConfig, getTierItems,
+  upsertWornBis, upsertTierSnapshot,
+} from '../../../lib/db.js';
 import { toCanonical, getCharSpecs, getArmorType, buildTrackRanges, getItemTrack, mergeTrack } from '../../../lib/specs.js';
-import { matchesBis, PAIRED_BIS_SLOTS } from '../../../lib/bis-match.js';
-import { parseSimcGear } from '../../../lib/simc.js';
+import { matchesBis, applyRaidBisInference, PAIRED_BIS_SLOTS } from '../../../lib/bis-match.js';
+import { parseSimcGear, parseSimcHeader } from '../../../lib/simc.js';
 
 const router = new Hono();
 
 router.get('/', requireAuth, async (c) => {
-  const { id: userId, teamSheetId, charId, charName, spec } = c.get('session').user;
+  const { id: userId, teamId, charId, charName, spec } = c.get('session').user;
 
-  if (!teamSheetId) {
+  if (!teamId) {
     return c.json({ loot: [], bis: [], noTeam: true });
   }
 
+  const db = c.env.DB;
+
   try {
-    // Batch-load all team sheet tabs in one API call; master sheet reads run in parallel.
-    const [, effectiveBis, itemDb] = await Promise.all([
-      primeTeamCache(teamSheetId, ['roster', 'lootLog', 'bisSubmissions', 'wornBis']),
-      getEffectiveDefaultBis(),
-      getItemDb(),
-    ]);
-    const [roster, lootLog, bisSubmissions, wornBisMap] = await Promise.all([
-      getRoster(teamSheetId),
-      getLootLog(teamSheetId),
-      getBisSubmissions(teamSheetId),
-      getWornBis(teamSheetId),
+    const [roster, lootLog, bisSubmissions, wornBisMap, effectiveBis, itemDb] = await Promise.all([
+      getRoster(db, teamId),
+      getLootLog(db, teamId),
+      getBisSubmissions(db, teamId),
+      getWornBis(db, teamId),
+      getEffectiveDefaultBis(db),
+      getItemDb(db),
     ]);
 
     const rosterEntry = roster.find(r =>
-      charId && r.charId ? r.charId === charId : r.charName.toLowerCase() === charName.toLowerCase()
+      charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase()
     );
     const charSpecs = rosterEntry ? getCharSpecs(rosterEntry) : { primary: spec, secondary: [], pending: null, all: [spec] };
 
-    // ?spec= param allows browsing any of the character's specs on the dashboard
     const requestedSpec = c.req.query('spec') || charSpecs.primary;
     const activeSpec    = charSpecs.all.includes(requestedSpec) ? requestedSpec : charSpecs.primary;
 
     const itemIdByName = new Map();
     for (const item of itemDb) {
-      if (item.name) itemIdByName.set(item.name.toLowerCase(), item.itemId);
+      if (item.name) itemIdByName.set(item.name.toLowerCase(), item.item_id);
     }
 
     const loot = lootLog
-      .filter(e => charId && e.recipientCharId
-        ? e.recipientCharId === charId
-        : (e.recipientChar ?? '').toLowerCase() === charName.toLowerCase())
+      .filter(e => charId && e.recipient_char_id
+        ? e.recipient_char_id === charId
+        : (e.recipient_name ?? '').toLowerCase() === charName.toLowerCase())
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .map(e => ({
         ...e,
-        itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '',
+        itemId: itemIdByName.get((e.item_name ?? '').toLowerCase()) ?? '',
       }));
 
     const charApprovedBis = bisSubmissions.filter(s =>
       s.status === 'Approved' &&
-      (charId && s.charId ? s.charId === charId : s.charName.toLowerCase() === charName.toLowerCase())
+      (charId && s.char_id ? s.char_id === charId : s.char_name.toLowerCase() === charName.toLowerCase())
     );
 
-    // BIS data for the requested spec
-    const approvedBis = charApprovedBis.filter(s =>
-      s.spec ? s.spec.toLowerCase() === activeSpec.toLowerCase() : activeSpec === charSpecs.primary
-    );
+    const approvedBis = charApprovedBis
+      .filter(s => s.spec ? s.spec.toLowerCase() === activeSpec.toLowerCase() : activeSpec === charSpecs.primary)
+      .map(s => ({
+        slot:          s.slot,
+        spec:          s.spec          ?? '',
+        status:        s.status        ?? '',
+        trueBis:       s.true_bis      ?? '',
+        trueBisItemId: s.true_bis_item_id ?? '',
+        raidBis:       s.raid_bis      ?? '',
+        raidBisItemId: s.raid_bis_item_id ?? '',
+        rationale:     s.rationale     ?? '',
+        officerNote:   s.officer_note  ?? '',
+      }));
     const canonicalSpec = toCanonical(activeSpec);
     const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
     const specDefaults  = applyRaidBisInference(specRows, itemDb);
@@ -75,23 +85,23 @@ router.get('/', requireAuth, async (c) => {
     const charBisStatus = Object.fromEntries(allChars.map(ch => [ch.charName, {
       pending:  bisSubmissions.filter(s =>
         s.status === 'Pending' &&
-        (ch.charId && s.charId ? s.charId === ch.charId : s.charName.toLowerCase() === ch.charName.toLowerCase())
+        (ch.charId && s.char_id ? s.char_id === ch.charId : s.char_name.toLowerCase() === ch.charName.toLowerCase())
       ).length,
       rejected: bisSubmissions.filter(s =>
         s.status === 'Rejected' &&
-        (ch.charId && s.charId ? s.charId === ch.charId : s.charName.toLowerCase() === ch.charName.toLowerCase())
+        (ch.charId && s.char_id ? s.char_id === ch.charId : s.char_name.toLowerCase() === ch.charName.toLowerCase())
       ).length,
     }]));
 
-    // Build slot→tracks map for the current character + active spec from the Worn BIS sheet
+    // Build slot→tracks map for the current character + active spec from Worn BIS
     const wornBis = {};
-    for (const row of wornBisMap.values()) {
-      if (row.charId !== charId) continue;
+    for (const [key, row] of wornBisMap) {
+      if (row.char_id !== charId) continue;
       if (row.spec.toLowerCase() !== activeSpec.toLowerCase()) continue;
       wornBis[row.slot] = {
-        overallBISTrack: row.overallBISTrack ?? '',
-        raidBISTrack:    row.raidBISTrack    ?? '',
-        otherTrack:      row.otherTrack      ?? '',
+        overallBISTrack: row.overall_bis_track ?? '',
+        raidBISTrack:    row.raid_bis_track    ?? '',
+        otherTrack:      row.other_track       ?? '',
       };
     }
 
@@ -116,27 +126,28 @@ router.get('/', requireAuth, async (c) => {
  * Body: { simcText: string, spec: string }
  */
 router.post('/simc', requireAuth, async (c) => {
-  const { teamSheetId, charId, charName, spec: sessionSpec } = c.get('session').user;
-  if (!teamSheetId) return c.json({ error: 'No team' }, 400);
+  const { teamId, charId, charName, spec: sessionSpec } = c.get('session').user;
+  if (!teamId) return c.json({ error: 'No team' }, 400);
 
   let body;
   try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
   const { simcText, spec: requestedSpec } = body ?? {};
   if (!simcText || typeof simcText !== 'string') return c.json({ error: 'simcText is required' }, 400);
 
+  const db = c.env.DB;
+
   try {
-    const [, globalConfig, itemDbRows, tierItemRows, allSubs, effectiveDefaultBis, roster] = await Promise.all([
-      primeTeamCache(teamSheetId, ['roster', 'bisSubmissions', 'wornBis', 'tierSnapshot']),
-      getGlobalConfig(),
-      getItemDb(),
-      getTierItems(),
-      getBisSubmissions(teamSheetId),
-      getEffectiveDefaultBis(),
-      getRoster(teamSheetId),
+    const [globalConfig, itemDbRows, tierItemRows, allSubs, effectiveDefaultBis, roster] = await Promise.all([
+      getGlobalConfig(db),
+      getItemDb(db),
+      getTierItems(db),
+      getBisSubmissions(db, teamId),
+      getEffectiveDefaultBis(db),
+      getRoster(db, teamId),
     ]);
 
     const rosterEntry = roster.find(r =>
-      charId && r.charId ? r.charId === charId : r.charName.toLowerCase() === charName.toLowerCase()
+      charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase()
     );
     if (!rosterEntry) return c.json({ error: 'Character not found on roster' }, 404);
 
@@ -145,24 +156,20 @@ router.post('/simc', requireAuth, async (c) => {
     const charClass  = rosterEntry.class;
     const armorType  = getArmorType(toCanonical(activeSpec));
 
-    // Build track ranges and crafted item ID set from global config
     const { wcl_veteran_bonus_id, wcl_crafted_bonus_ids } = globalConfig;
     const trackRanges    = buildTrackRanges(Number(wcl_veteran_bonus_id) || 0);
     const craftedBonusIds = new Set(
       String(wcl_crafted_bonus_ids ?? '').split('|').map(Number).filter(Boolean)
     );
 
-    // Build item DB lookup: itemId (number) → { slot, armorType, isTierToken, name }
     const itemDbMap = new Map();
-    for (const row of itemDbRows) itemDbMap.set(Number(row.itemId), row);
+    for (const row of itemDbRows) itemDbMap.set(Number(row.item_id), row);
 
-    // Build tier items for this character's class: itemId → slot
     const tierItemsForClass = new Map();
-    for (const { class: cls, slot, itemId } of tierItemRows) {
-      if (cls === charClass) tierItemsForClass.set(Number(itemId), slot);
+    for (const { class: cls, slot, item_id } of tierItemRows) {
+      if (cls === charClass) tierItemsForClass.set(Number(item_id), slot);
     }
 
-    // Build BIS slot map for this character + spec (approved submissions > spec defaults)
     const defaultBisBySpec = new Map();
     for (const row of effectiveDefaultBis) {
       if (!defaultBisBySpec.has(row.spec)) defaultBisBySpec.set(row.spec, []);
@@ -170,30 +177,43 @@ router.post('/simc', requireAuth, async (c) => {
     }
     const charSubs = allSubs.filter(s =>
       s.status === 'Approved' &&
-      (charId && s.charId ? s.charId === charId : s.charName.toLowerCase() === charName.toLowerCase())
+      (charId && s.char_id ? s.char_id === charId : s.char_name.toLowerCase() === charName.toLowerCase())
     );
-    const bisSlotMap = new Map(); // slot → { trueBis, trueBisItemId, raidBis, raidBisItemId }
+    const bisSlotMap = new Map();
     for (const row of defaultBisBySpec.get(toCanonical(activeSpec)) ?? []) {
-      bisSlotMap.set(row.slot, { trueBis: row.trueBis, trueBisItemId: row.trueBisItemId, raidBis: row.raidBis, raidBisItemId: row.raidBisItemId });
+      bisSlotMap.set(row.slot, { trueBis: row.true_bis, trueBisItemId: row.true_bis_item_id, raidBis: row.raid_bis, raidBisItemId: row.raid_bis_item_id });
     }
     const specSubs = charSubs.filter(s => s.spec ? s.spec === activeSpec : activeSpec === charSpecs.primary);
     for (const sub of specSubs) {
-      bisSlotMap.set(sub.slot, { trueBis: sub.trueBis, trueBisItemId: sub.trueBisItemId, raidBis: sub.raidBis, raidBisItemId: sub.raidBisItemId });
+      bisSlotMap.set(sub.slot, { trueBis: sub.true_bis, trueBisItemId: sub.true_bis_item_id, raidBis: sub.raid_bis, raidBisItemId: sub.raid_bis_item_id });
     }
 
-    // Parse SimC export
     const gear = parseSimcGear(simcText);
     if (!gear.length) return c.json({ error: 'No gear found in SimC export' }, 400);
 
-    // Process each gear item
-    const wornBisMap  = new Map(); // slot → { overallBISTrack, raidBISTrack, otherTrack }
-    const tierPieces  = new Map(); // tierSlot → track
+    const simcHeader = parseSimcHeader(simcText);
+    if (simcHeader) {
+      const nameMatch = simcHeader.charName.toLowerCase() === rosterEntry.char_name.toLowerCase();
+      if (!nameMatch) {
+        return c.json({
+          error: `SimC profile is for "${simcHeader.charName}" but you are importing for "${rosterEntry.char_name}". Please export the correct character.`,
+        }, 400);
+      }
+      if (simcHeader.spec && simcHeader.spec.toLowerCase() !== toCanonical(activeSpec).toLowerCase()) {
+        return c.json({
+          error: `SimC profile is for ${simcHeader.spec} but the selected spec is ${activeSpec}. Please export the correct spec or switch specs before importing.`,
+        }, 400);
+      }
+    }
+
+    const wornBisMap  = new Map();
+    const tierPieces  = new Map();
 
     for (const { slot, itemId, bonusIds } of gear) {
-      const rawTrack        = getItemTrack(bonusIds, trackRanges);
-      const matchedCrafted  = rawTrack === 'Unknown' ? bonusIds.find(id => craftedBonusIds.has(id)) : undefined;
-      const isCrafted       = matchedCrafted !== undefined;
-      if (rawTrack === 'Unknown' && !isCrafted) continue; // skip unrecognised-track items
+      const rawTrack       = getItemTrack(bonusIds, trackRanges);
+      const matchedCrafted = rawTrack === 'Unknown' ? bonusIds.find(id => craftedBonusIds.has(id)) : undefined;
+      const isCrafted      = matchedCrafted !== undefined;
+      if (rawTrack === 'Unknown' && !isCrafted) continue;
 
       const recordTrack = isCrafted ? 'Crafted' : rawTrack;
       const dbEntry     = itemDbMap.get(itemId);
@@ -201,19 +221,17 @@ router.post('/simc', requireAuth, async (c) => {
         itemId:      String(itemId),
         name:        dbEntry?.name ?? '',
         slot:        dbEntry?.slot ?? '',
-        armorType:   dbEntry?.armorType ?? '',
-        isTierToken: dbEntry?.isTierToken ?? false,
+        armorType:   dbEntry?.armor_type ?? '',
+        isTierToken: dbEntry?.is_tier_token === 1,
       };
 
-      // Tier snapshot — non-token tier pieces identified by class-specific item ID list
       const tierSlot = tierItemsForClass.get(itemId);
       if (tierSlot && rawTrack !== 'Unknown') {
         tierPieces.set(tierSlot, mergeTrack(tierPieces.get(tierSlot) ?? '', rawTrack));
       }
 
-      // Check BIS match across paired slots (rings/trinkets cross-match)
-      const bisSlots     = PAIRED_BIS_SLOTS[slot] ?? [slot];
-      let matchedAnyBis  = false;
+      const bisSlots    = PAIRED_BIS_SLOTS[slot] ?? [slot];
+      let matchedAnyBis = false;
 
       for (const bisSlot of bisSlots) {
         const charBis = bisSlotMap.get(bisSlot);
@@ -243,8 +261,6 @@ router.post('/simc', requireAuth, async (c) => {
       }
     }
 
-    // Second pass: tier pieces can't be matched via matchesBis (they're not tokens).
-    // For slots where BIS is <Tier>, pull the track directly from the tierPieces map.
     for (const [tierSlot, track] of tierPieces) {
       const charBis = bisSlotMap.get(tierSlot);
       if (!charBis) continue;
@@ -259,25 +275,24 @@ router.post('/simc', requireAuth, async (c) => {
       });
     }
 
+    const updatedAt  = new Date().toISOString();
     const wornBisRows = [...wornBisMap.entries()].map(([slot, tracks]) => ({
-      charId:   rosterEntry.charId,
-      charName: rosterEntry.charName,
+      charId:   rosterEntry.id,
       spec:     activeSpec,
       slot,
+      updatedAt,
       ...tracks,
     }));
-    if (wornBisRows.length) await upsertWornBis(teamSheetId, wornBisRows);
+    if (wornBisRows.length) await upsertWornBis(db, teamId, wornBisRows);
 
-    // Write tier snapshot (upsertTierSnapshot merges best-ever with existing sheet data)
     if (tierPieces.size) {
       const tierDetail = [...tierPieces.entries()].map(([s, t]) => `${s}:${t}`).join('|');
-      await upsertTierSnapshot(teamSheetId, [{
-        charId:    rosterEntry.charId,
-        charName:  rosterEntry.charName,
-        raidId:    'simc-import',
+      await upsertTierSnapshot(db, teamId, [{
+        charId:    rosterEntry.id,
+        raidId:    null,
         tierCount: tierPieces.size,
         tierDetail,
-        updatedAt: new Date().toISOString(),
+        updatedAt,
       }]);
     }
 

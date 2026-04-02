@@ -1,4 +1,5 @@
 import { apiPath } from '../lib/api.js';
+import { refreshMe } from '../hooks/useMe.js';
 import { useState, useEffect, Fragment } from 'react';
 import ItemLink from '../components/ItemLink.jsx';
 
@@ -428,7 +429,7 @@ function AccountWidget({ accountChars, accountLoot, currentChar }) {
 
 // ── Character detail panel ─────────────────────────────────────────────────────
 
-function CharacterDetail({ charName, onClose }) {
+function CharacterDetail({ charId, charName, onClose }) {
   const [data,         setData]         = useState(null);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState(null);
@@ -441,13 +442,13 @@ function CharacterDetail({ charName, onClose }) {
   const reload = () => {
     setLoading(true);
     setError(null);
-    fetch(apiPath(`/api/roster/${encodeURIComponent(charName)}`), { credentials: 'include' })
+    fetch(apiPath(`/api/roster/${charId}`), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { setData(d); setActiveSpec(s => s ?? d.spec); setLoading(false); })
       .catch(() => { setError(true); setLoading(false); });
   };
 
-  useEffect(() => { reload(); }, [charName]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { reload(); }, [charId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (data) window.$WowheadPower?.refreshLinks(); }, [data]);
 
   const handleSecondarySpecRemove = async (specToRemove) => {
@@ -455,10 +456,10 @@ function CharacterDetail({ charName, onClose }) {
     setSpecBusy(true); setSpecMsg(null);
     const newList = (data.secondarySpecs ?? []).filter(s => s !== specToRemove);
     try {
-      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(data.charName)}/secondary-specs`), {
+      const res = await fetch(apiPath(`/api/roster/${charId}/secondary-specs`), {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ specs: newList, charId: data.charId }),
+        body: JSON.stringify({ specs: newList }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.status);
       reload();
@@ -471,10 +472,10 @@ function CharacterDetail({ charName, onClose }) {
     setSpecBusy(true); setSpecMsg(null);
     const newList = [...new Set([...(data.secondarySpecs ?? []), addSpecValue])];
     try {
-      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(data.charName)}/secondary-specs`), {
+      const res = await fetch(apiPath(`/api/roster/${charId}/secondary-specs`), {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ specs: newList, charId: data.charId }),
+        body: JSON.stringify({ specs: newList }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.status);
       setShowAddSpec(false); setAddSpecValue('');
@@ -487,10 +488,10 @@ function CharacterDetail({ charName, onClose }) {
     if (!data) return;
     setSpecBusy(true); setSpecMsg(null);
     try {
-      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(data.charName)}/spec-change`), {
+      const res = await fetch(apiPath(`/api/roster/${charId}/spec-change`), {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ charId: data.charId, approve }),
+        body: JSON.stringify({ approve }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.status);
       reload();
@@ -511,7 +512,7 @@ function CharacterDetail({ charName, onClose }) {
             ? <span className="roster-detail-name">{charName}</span>
             : data && (
               <>
-                <span className="roster-detail-name">{data.charName}</span>
+                <span className="roster-detail-name">{charName || data.charName}</span>
                 <span className="roster-detail-spec">{data.spec} (primary)</span>
                 {(data.secondarySpecs ?? []).map(s => (
                   <span key={s} className="roster-detail-spec roster-detail-spec-secondary">
@@ -817,8 +818,9 @@ export default function RosterPage() {
   const [deleteConfirmChar, setDeleteConfirmChar]   = useState(null); // charName pending delete confirmation
   const [deleteConfirmCharId, setDeleteConfirmCharId] = useState(null); // charId pending delete confirmation
   const [deleting, setDeleting]                   = useState(null); // charName being deleted
-  const [renamingChar, setRenamingChar]           = useState(null); // charName being renamed
-  const [renameValue,  setRenameValue]            = useState('');
+  const [renamingChar,   setRenamingChar]   = useState(null); // charName being renamed (display only)
+  const [renamingCharId, setRenamingCharId] = useState(null); // charId being renamed (for API)
+  const [renameValue,    setRenameValue]    = useState('');
   const [renameConflict, setRenameConflict]       = useState(null); // { charName, newName, existingCharId, existingCharName }
   const [renameConflictNewServer,      setRenameConflictNewServer]      = useState('');
   const [renameConflictExistingServer, setRenameConflictExistingServer] = useState('');
@@ -840,8 +842,8 @@ export default function RosterPage() {
   const bench    = roster.filter(c => c.status === 'Bench').length;
   const inactive = roster.filter(c => c.status === 'Inactive').length;
 
-  const handleRowClick = (charName) => {
-    setSelectedChar(prev => prev === charName ? null : charName);
+  const handleRowClick = (charId) => {
+    setSelectedChar(prev => prev === charId ? null : charId);
   };
 
   const handleEditOwner = (e, char) => {
@@ -897,11 +899,11 @@ export default function RosterPage() {
     ));
 
     try {
-      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(charName)}/owner`), {
+      const res = await fetch(apiPath(`/api/roster/${charId}/owner`), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
-        body:        JSON.stringify({ ownerId, ownerNick: nick, charId }),
+        body:        JSON.stringify({ ownerId, ownerNick: nick }),
       });
       if (!res.ok) throw new Error(res.status);
     } catch {
@@ -922,11 +924,9 @@ export default function RosterPage() {
     ));
 
     try {
-      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(char.charName)}/owner`), {
+      const res = await fetch(apiPath(`/api/roster/${char.charId}/owner`), {
         method:  'DELETE',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ charId }),
       });
       if (!res.ok) throw new Error(res.status);
     } catch {
@@ -955,11 +955,11 @@ export default function RosterPage() {
     ));
 
     try {
-      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(char.charName)}/status`), {
+      const res = await fetch(apiPath(`/api/roster/${char.charId}/status`), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
-        body:        JSON.stringify({ status: newStatus, charId: char.charId }),
+        body:        JSON.stringify({ status: newStatus }),
       });
       if (!res.ok) throw new Error(res.status);
     } catch {
@@ -972,11 +972,11 @@ export default function RosterPage() {
     }
   };
 
-  const doRename = async (charName, newName, { server = '', resolveConflictCharId = '', resolveConflictServer = '' } = {}) => {
+  const doRename = async (charId, newName, { server = '', resolveConflictCharId = '', resolveConflictServer = '' } = {}) => {
     setRenameSaving(true);
     setRenameError(null);
     try {
-      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(charName)}/rename`), {
+      const res = await fetch(apiPath(`/api/roster/${charId}/rename`), {
         method:      'POST',
         credentials: 'include',
         headers:     { 'Content-Type': 'application/json' },
@@ -985,7 +985,7 @@ export default function RosterPage() {
       const body = await res.json();
       if (res.status === 409 && body.conflict) {
         setRenameConflict({
-          charName,
+          charId,
           newName,
           existingCharId:      body.existingCharId,
           existingCharName:    body.existingCharName,
@@ -996,6 +996,7 @@ export default function RosterPage() {
         setRenameConflictExistingServer(body.existingServer ?? '');
         setRenameSaving(false);
         setRenamingChar(null);
+        setRenamingCharId(null);
         return;
       }
       if (!res.ok) {
@@ -1003,12 +1004,14 @@ export default function RosterPage() {
         setRenameSaving(false);
         return;
       }
-      // Update roster in state — match by charId so same-named chars on different servers aren't all renamed
+      // Update roster in state — charId is stable across rename
       setRoster(prev => prev.map(c =>
         c.charId === body.charId ? { ...c, charName: newName, server: server.trim() } : c
       ));
-      if (selectedChar === charName) setSelectedChar(newName);
+      // Refresh session user so dashboard tabs reflect the new name immediately
+      refreshMe();
       setRenamingChar(null);
+      setRenamingCharId(null);
       setRenameValue('');
       setRenameServerValue('');
     } catch {
@@ -1022,6 +1025,7 @@ export default function RosterPage() {
   const handleStartRename = (e, char) => {
     e.stopPropagation();
     setRenamingChar(char.charName);
+    setRenamingCharId(char.charId);
     setRenameValue(char.charName);
     setRenameServerValue(char.server ?? '');
     setRenameError(null);
@@ -1029,15 +1033,15 @@ export default function RosterPage() {
 
   const handleSaveRenameModal = async () => {
     const newName = renameValue.trim();
-    if (!newName || !renamingChar) { setRenamingChar(null); return; }
-    await doRename(renamingChar, newName, { server: renameServerValue });
+    if (!newName || !renamingCharId) { setRenamingChar(null); setRenamingCharId(null); return; }
+    await doRename(renamingCharId, newName, { server: renameServerValue });
   };
 
   const handleResolveRenameConflict = async () => {
     if (!renameConflictNewServer.trim() || !renameConflictExistingServer.trim()) return;
-    const { charName, newName, existingCharId } = renameConflict;
+    const { charId, newName, existingCharId } = renameConflict;
     setRenameConflict(null);
-    await doRename(charName, newName, {
+    await doRename(charId, newName, {
       server:               renameConflictNewServer.trim(),
       resolveConflictCharId: existingCharId,
       resolveConflictServer: renameConflictExistingServer.trim(),
@@ -1047,16 +1051,13 @@ export default function RosterPage() {
   const handleDeleteChar = async (charName, charId) => {
     setDeleting(charName);
     try {
-      const res = await fetch(apiPath(`/api/roster/${encodeURIComponent(charName)}`), {
+      const res = await fetch(apiPath(`/api/roster/${charId}`), {
         method:  'DELETE',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ charId }),
       });
       if (!res.ok) throw new Error(res.status);
-      // Match by charId so same-named chars aren't both removed
       setRoster(prev => prev.filter(c => c.charId !== charId));
-      if (selectedChar === charName) setSelectedChar(null);
+      if (selectedChar === charId) setSelectedChar(null);
     } catch {
       // leave roster unchanged on failure
     } finally {
@@ -1145,20 +1146,20 @@ export default function RosterPage() {
                       : [];
                     const row = (
               <tr
-                key={char.charName}
+                key={char.charId}
                 className={[
                   'roster-row',
-                  selectedChar === char.charName ? 'roster-row-selected' : '',
-                  char.status === 'Inactive'     ? 'roster-row-inactive' : '',
-                  char.status === 'Bench'        ? 'roster-row-bench'    : '',
+                  selectedChar === char.charId ? 'roster-row-selected' : '',
+                  char.status === 'Inactive'   ? 'roster-row-inactive' : '',
+                  char.status === 'Bench'      ? 'roster-row-bench'    : '',
                 ].filter(Boolean).join(' ')}
-                onClick={() => handleRowClick(char.charName)}
+                onClick={() => handleRowClick(char.charId)}
               >
                 <td className="roster-col-name" onClick={e => e.stopPropagation()}>
                   <span className="roster-char-name-cell">
                     <span
                       className="roster-char-name"
-                      onClick={() => handleRowClick(char.charName)}
+                      onClick={() => handleRowClick(char.charId)}
                       style={{ cursor: 'pointer' }}
                     >
                       {char.charName}
@@ -1335,7 +1336,8 @@ export default function RosterPage() {
       {selectedChar && (
         <CharacterDetail
           key={selectedChar}
-          charName={selectedChar}
+          charId={selectedChar}
+          charName={roster?.find(c => c.charId === selectedChar)?.charName ?? ''}
           onClose={() => setSelectedChar(null)}
         />
       )}

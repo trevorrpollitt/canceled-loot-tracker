@@ -1,16 +1,16 @@
 /**
  * teams.js — resolves which team a Discord interaction belongs to.
  *
- * Team discovery is entirely sheet-driven:
- *   1. The master sheet (MASTER_SHEET_ID) has a "Teams" tab with TeamName + SheetId rows.
- *   2. initTeams() reads that registry, then reads each team's own Config tab to load
- *      channel IDs and role IDs.
+ * Team discovery is D1-backed:
+ *   1. The `teams` table lists all registered teams.
+ *   2. initTeams(db) reads that table, then reads each team's `team_config` rows to
+ *      load channel IDs and role IDs into the in-memory cache.
  *
- * Adding a new team = add a row to the Teams tab in the master sheet + create the
- * team sheet. No env var changes, no code changes, no redeploy needed.
+ * Adding a new team = insert a row into `teams` + insert config rows into `team_config`.
+ * No env var changes, no code changes, no redeploy needed.
  */
 
-import { getTeamRegistry, getConfig } from './sheets.js';
+import { getAllTeams as dbGetAllTeams, getTeamConfig } from './db.js';
 import { log } from './logger.js';
 
 // In-memory team registry — populated by initTeams() at startup.
@@ -25,44 +25,46 @@ function parseRoleIds(value) {
 // ── Startup initialisation ────────────────────────────────────────────────────
 
 /**
- * Load all teams from the master sheet Teams registry, then load each team's
- * Config tab to populate channel IDs and role IDs.
+ * Load all teams from D1, then load each team's config rows to populate
+ * channel IDs and role IDs into the in-memory cache.
  *
  * Must be called once at startup (before bot login / server listen).
  *
- * Config keys read from each team's sheet:
+ * Config keys read from team_config:
  *   console_channel_id — #raid-console channel where panels are posted
  *   brief_channel_id   — pre-raid brief channel
  *   officer_role_id    — Discord role ID(s) for officers (pipe-separated for multiple)
  *   team_role_id       — Discord role ID(s) for team members (pipe-separated for multiple)
  *
- * guild_id is NOT loaded here — it lives in the master sheet Global Config tab
- * and is read directly by auth.js via getGlobalConfig().
+ * guild_id is NOT loaded here — it lives in global_config and is read directly
+ * by auth.js via getGlobalConfig().
+ *
+ * @param {import('./db.js').D1Database} db
  */
-export async function initTeams() {
-  log.verbose('[teams] initTeams — loading team registry');
+export async function initTeams(db) {
+  log.verbose('[teams] initTeams — loading team registry from D1');
   // Clear any previous state (safe for hot-reload scenarios)
   for (const key of Object.keys(TEAMS)) delete TEAMS[key];
 
   let registry;
   try {
-    registry = await getTeamRegistry();
+    registry = await dbGetAllTeams(db);
   } catch (err) {
-    log.error('[teams] Failed to load team registry from master sheet:', err.message);
+    log.error('[teams] Failed to load team registry from D1:', err.message);
     return;
   }
 
   if (!registry.length) {
-    log.warn('[teams] Team registry is empty — add rows to the Teams tab in the master sheet');
+    log.warn('[teams] Team registry is empty — insert rows into the teams table');
     return;
   }
 
-  log.verbose(`[teams] Found ${registry.length} team(s) in registry:`, registry.map(t => t.name).join(', '));
+  log.verbose(`[teams] Found ${registry.length} team(s):`, registry.map(t => t.name).join(', '));
 
-  for (const { name, sheetId } of registry) {
+  for (const { id, name } of registry) {
     TEAMS[name.toLowerCase()] = {
+      id,
       name,
-      sheetId,
       consoleChannelId: null,
       briefChannelId:   null,
       officerRoleIds:   [],
@@ -70,10 +72,10 @@ export async function initTeams() {
     };
   }
 
-  // Load per-team config from each team's Config tab — all teams in parallel
+  // Load per-team config — all teams in parallel
   await Promise.all(Object.values(TEAMS).map(async (team) => {
     try {
-      const config = await getConfig(team.sheetId);
+      const config = await getTeamConfig(db, team.id);
       team.consoleChannelId = config.console_channel_id || null;
       team.briefChannelId   = config.brief_channel_id   || null;
       team.officerRoleIds   = parseRoleIds(config.officer_role_id);
@@ -94,7 +96,7 @@ export async function initTeams() {
  * Returns the team whose console channel matches, or null if not found.
  *
  * @param {string} channelId
- * @returns {{ name, sheetId, consoleChannelId, briefChannelId, officerRoleIds, memberRoleIds } | null}
+ * @returns {{ id, name, consoleChannelId, briefChannelId, officerRoleIds, memberRoleIds } | null}
  */
 export function getTeamByChannel(channelId) {
   for (const team of Object.values(TEAMS)) {

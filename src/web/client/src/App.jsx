@@ -5,6 +5,8 @@ import Dashboard        from './pages/Dashboard.jsx';
 import Bis              from './pages/Bis.jsx';
 import Admin            from './pages/Admin.jsx';
 import AdminDefaultBis  from './pages/AdminDefaultBis.jsx';
+import AdminTeamConfig  from './pages/AdminTeamConfig.jsx';
+import AdminGlobalConfig from './pages/AdminGlobalConfig.jsx';
 import AdminBisReview   from './pages/AdminBisReview.jsx';
 import Council          from './pages/Council.jsx';
 import LootImport       from './pages/LootImport.jsx';
@@ -82,6 +84,16 @@ export default function App() {
       <Route path="/admin" element={
         <OfficerRoute>
           <Layout><Admin /></Layout>
+        </OfficerRoute>
+      } />
+      <Route path="/admin/team-config" element={
+        <OfficerRoute>
+          <Layout><AdminTeamConfig /></Layout>
+        </OfficerRoute>
+      } />
+      <Route path="/admin/global-config" element={
+        <OfficerRoute>
+          <Layout><AdminGlobalConfig /></Layout>
         </OfficerRoute>
       } />
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -8,12 +8,11 @@
 import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
-  primeTeamCache,
   getRoster, getRclcResponseMap,
   getLootLog, appendLootEntries, patchLootEntryDifficulties, patchLootEntryIgnored,
   reassignLootEntries, backfillLootEntryIds, getRaids,
-  getConfig,
-} from '../../../lib/sheets.js';
+  getTeamConfig,
+} from '../../../lib/db.js';
 import { parseRclcCsv, buildLootEntries, buildExistingKeys, isRecipeItem } from '../../../lib/rclc.js';
 
 const COUNTED      = new Set(['BIS', 'Non-BIS']);
@@ -29,15 +28,14 @@ router.get('/history', async (c) => {
     return c.json({ error: 'Officer access required.' }, 403);
   }
 
-  const { teamSheetId } = c.get('session').user;
-
-  await primeTeamCache(teamSheetId, ['roster', 'lootLog', 'raids', 'config']);
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
 
   const [roster, lootLog, raids, config] = await Promise.all([
-    getRoster(teamSheetId),
-    getLootLog(teamSheetId),
-    getRaids(teamSheetId),
-    getConfig(teamSheetId),
+    getRoster(db, teamId),
+    getLootLog(db, teamId),
+    getRaids(db, teamId),
+    getTeamConfig(db, teamId),
   ]);
 
   const heroicWeight = parseFloat(config.council_heroic_weight ?? '0.2');
@@ -49,13 +47,11 @@ router.get('/history', async (c) => {
   for (const raid of raids) for (const id of raid.attendeeIds) raidsByOwner[id] = (raidsByOwner[id] ?? 0) + 1;
 
   // Lookup maps for joining loot → roster
-  const charById   = new Map(roster.map(r => [r.charId,                    r]));
-  const charByName = new Map(roster.map(r => [r.charName.toLowerCase(),    r]));
+  const charById   = new Map(roster.map(r => [r.id,                          r]));
+  const charByName = new Map(roster.map(r => [r.char_name.toLowerCase(),     r]));
 
-  // Track skipped rows for diagnostic display
   const skipped = { wrongDifficulty: [], noRosterMatch: [], tertiary: [], manuallyIgnored: [] };
 
-  // Normal/Heroic/Mythic only — loot data is expected to be wiped between seasons
   const entries = [];
   for (const e of lootLog) {
     if (e.ignored) {
@@ -70,34 +66,32 @@ router.get('/history', async (c) => {
   }
 
   // Seed every roster member so characters with no loot still appear
-  const grouped = new Map(); // charId → { char, entries[] }
-  for (const char of roster) grouped.set(char.charId, { char, entries: [] });
+  const grouped = new Map();
+  for (const char of roster) grouped.set(char.id, { char, entries: [] });
 
   for (const entry of entries) {
-    const char = (entry.recipientCharId && charById.get(entry.recipientCharId))
-      ?? charByName.get(entry.recipientChar.toLowerCase());
+    const char = (entry.recipient_char_id && charById.get(entry.recipient_char_id))
+      ?? charByName.get((entry.recipient_name ?? '').toLowerCase());
     if (!char) {
-      skipped.noRosterMatch.push({ ...entry, skipReason: `No roster match for "${entry.recipientChar}"${entry.recipientCharId ? ` (charId: ${entry.recipientCharId})` : ''}` });
+      skipped.noRosterMatch.push({ ...entry, skipReason: `No roster match for "${entry.recipient_name}"${entry.recipient_char_id ? ` (charId: ${entry.recipient_char_id})` : ''}` });
       continue;
     }
 
-    if (!grouped.has(char.charId)) grouped.set(char.charId, { char, entries: [] });
-    grouped.get(char.charId).entries.push(entry);
+    if (!grouped.has(char.id)) grouped.set(char.id, { char, entries: [] });
+    grouped.get(char.id).entries.push(entry);
   }
 
   const players = [...grouped.values()].map(({ char, entries: charEntries }) => {
-    // Per-difficulty counts for BIS and Non-BIS (Tertiary excluded from display)
     const counts = { BIS: {}, 'Non-BIS': {} };
     for (const e of charEntries) {
-      if (COUNTED.has(e.upgradeType)) {
+      if (COUNTED.has(e.upgrade_type)) {
         const d = e.difficulty || 'Unknown';
-        counts[e.upgradeType][d] = (counts[e.upgradeType][d] ?? 0) + 1;
+        counts[e.upgrade_type][d] = (counts[e.upgrade_type][d] ?? 0) + 1;
       }
     }
 
-    const raidsAttended = raidsByOwner[char.ownerId] ?? 0;
+    const raidsAttended = raidsByOwner[char.owner_id] ?? 0;
 
-    // Same weighted formula as the council loot-density multiplier
     const bisM    = counts.BIS['Mythic']        ?? 0;
     const bisH    = counts.BIS['Heroic']        ?? 0;
     const bisN    = counts.BIS['Normal']        ?? 0;
@@ -108,21 +102,19 @@ router.get('/history', async (c) => {
       + (nonBisM + nonBisH * heroicWeight + nonBisN * normalWeight) * nonBisWeight;
     const lootPerRaid = weighted / Math.max(raidsAttended, 1);
 
-    // Collect Tertiary rows into skipped (only once — use char's first pass)
     for (const e of charEntries) {
-      if (!COUNTED.has(e.upgradeType)) {
-        skipped.tertiary.push({ ...e, skipReason: `Upgrade type "${e.upgradeType}" excluded from loot score` });
+      if (!COUNTED.has(e.upgrade_type)) {
+        skipped.tertiary.push({ ...e, skipReason: `Upgrade type "${e.upgrade_type}" excluded from loot score` });
       }
     }
 
-    // Newest first for the detail panel; exclude Tertiary
     const loot = [...charEntries]
-      .filter(e => COUNTED.has(e.upgradeType))
+      .filter(e => COUNTED.has(e.upgrade_type))
       .sort((a, b) => b.date.localeCompare(a.date));
 
     return {
-      charId:       char.charId,
-      charName:     char.charName,
+      charId:       char.id,
+      charName:     char.char_name,
       class:        char.class,
       spec:         char.spec,
       status:       char.status,
@@ -133,34 +125,29 @@ router.get('/history', async (c) => {
     };
   });
 
-  // Primary sort: lootPerRaid desc. Secondary: charName alpha.
   players.sort((a, b) => b.lootPerRaid - a.lootPerRaid || a.charName.localeCompare(b.charName));
 
-  // Send active + bench roster so the client can populate the reassignment dropdown
   const rosterMembers = roster
     .filter(r => r.status === 'Active' || r.status === 'Bench')
-    .map(r => ({ charId: r.charId, charName: r.charName, spec: r.spec, status: r.status }))
+    .map(r => ({ charId: r.id, charName: r.char_name, spec: r.spec, status: r.status }))
     .sort((a, b) => a.charName.localeCompare(b.charName));
 
   return c.json({ players, heroicWeight, normalWeight, nonBisWeight, skipped, rosterMembers });
 });
 
 // ── POST /reprocess ───────────────────────────────────────────────────────────
-// Re-runs the roster ID backfill over the entire loot log. Call this after adding
-// missing roster entries so that previously-unresolvable rows get their CharId and
-// RecipientId populated without a full sheet migration run.
 
 router.post('/reprocess', async (c) => {
   if (!c.get('session').user?.isOfficer) {
     return c.json({ error: 'Officer access required.' }, 403);
   }
-  const { teamSheetId } = c.get('session').user;
-  const result = await backfillLootEntryIds(teamSheetId);
-  return c.json(result);
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
+  await backfillLootEntryIds(db, teamId);
+  return c.json({ ok: true });
 });
 
 // ── PATCH /entries/reassign ───────────────────────────────────────────────────
-// Manually reassign loot entries to a specific roster character (rename fix).
 
 router.patch('/entries/reassign', async (c) => {
   if (!c.get('session').user?.isOfficer) {
@@ -171,25 +158,25 @@ router.patch('/entries/reassign', async (c) => {
     return c.json({ error: 'assignments must be a non-empty array of { id, charId }.' }, 400);
   }
 
-  const { teamSheetId } = c.get('session').user;
-  const roster  = await getRoster(teamSheetId);
-  const charById = new Map(roster.map(r => [r.charId, r]));
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
+  const roster   = await getRoster(db, teamId);
+  const charById = new Map(roster.map(r => [r.id, r]));
 
   const resolved = assignments
     .map(({ id, charId }) => {
-      const char = charById.get(charId);
-      return char ? { id, charId, charName: char.charName, ownerId: char.ownerId } : null;
+      const char = charById.get(Number(charId));
+      return char ? { id: Number(id), rosterId: char.id } : null;
     })
     .filter(Boolean);
 
   if (!resolved.length) return c.json({ error: 'No valid charIds found in roster.' }, 400);
 
-  const updated = await reassignLootEntries(teamSheetId, resolved);
-  return c.json({ updated });
+  await reassignLootEntries(db, resolved);
+  return c.json({ updated: resolved.length });
 });
 
 // ── PATCH /ignored ────────────────────────────────────────────────────────────
-// Set or clear the Ignored flag (col L) for a list of entry IDs.
 
 router.patch('/ignored', async (c) => {
   if (!c.get('session').user?.isOfficer) {
@@ -197,11 +184,11 @@ router.patch('/ignored', async (c) => {
   }
   const { ids, ignored } = await c.req.json();
   if (!Array.isArray(ids) || !ids.length || typeof ignored !== 'boolean') {
-    return c.json({ error: 'ids (string[]) and ignored (boolean) are required.' }, 400);
+    return c.json({ error: 'ids (number[]) and ignored (boolean) are required.' }, 400);
   }
-  const { teamSheetId } = c.get('session').user;
-  const updated = await patchLootEntryIgnored(teamSheetId, ids, ignored);
-  return c.json({ updated });
+  const db = c.env.DB;
+  await patchLootEntryIgnored(db, ids, ignored);
+  return c.json({ updated: ids.length });
 });
 
 // ── PATCH /entries ────────────────────────────────────────────────────────────
@@ -217,19 +204,14 @@ router.patch('/entries', async (c) => {
   }
 
   const VALID_DIFF = new Set(['Normal', 'Heroic', 'Mythic']);
-  const correctionById = new Map();
-  for (const { id, difficulty } of corrections) {
-    if (id && VALID_DIFF.has(difficulty)) correctionById.set(id, difficulty);
-  }
-  if (!correctionById.size) {
+  const valid = corrections.filter(({ id, difficulty }) => id && VALID_DIFF.has(difficulty));
+  if (!valid.length) {
     return c.json({ error: 'No valid corrections supplied.' }, 400);
   }
 
-  const { teamSheetId } = c.get('session').user;
-  const updated = await patchLootEntryDifficulties(teamSheetId, correctionById);
-  if (!updated) return c.json({ error: 'No matching loot log entries found.' }, 404);
-
-  return c.json({ updated });
+  const db = c.env.DB;
+  await patchLootEntryDifficulties(db, valid);
+  return c.json({ updated: valid.length });
 });
 
 // ── POST /import ──────────────────────────────────────────────────────────────
@@ -245,22 +227,45 @@ router.post('/import', async (c) => {
   }
 
   try {
-    const { teamSheetId } = c.get('session').user;
+    const { teamId } = c.get('session').user;
+    const db = c.env.DB;
     const rows = parseRclcCsv(csvText);
     if (!rows.length) return c.json({ error: 'CSV appears to be empty or invalid.' }, 400);
 
     const [roster, responseMap, existingLog] = await Promise.all([
-      getRoster(teamSheetId),
-      getRclcResponseMap(teamSheetId),
-      getLootLog(teamSheetId),
+      getRoster(db, teamId),
+      getRclcResponseMap(db, teamId),
+      getLootLog(db, teamId),
     ]);
 
-    const existingKeys = buildExistingKeys(existingLog);
-    const { entries, warnings, skipped } = buildLootEntries(rows, roster, responseMap, existingKeys);
+    // rclc.js expects roster/lootLog with camelCase fields — adapt the D1 snake_case rows
+    const rosterForRclc = roster.map(r => ({
+      charId:   r.id,
+      charName: r.char_name,
+      class:    r.class,
+      spec:     r.spec,
+      ownerId:  r.owner_id,
+      server:   r.server,
+      status:   r.status,
+    }));
+    const lootLogForRclc = existingLog.map(e => ({
+      id:              e.id,
+      date:            e.date,
+      boss:            e.boss,
+      itemName:        e.item_name,
+      difficulty:      e.difficulty,
+      recipientId:     e.recipient_id,
+      recipientChar:   e.recipient_name,
+      recipientCharId: e.recipient_char_id,
+      upgradeType:     e.upgrade_type,
+      notes:           e.notes,
+    }));
 
-    if (entries.length) await appendLootEntries(teamSheetId, entries);
+    const existingKeys = buildExistingKeys(lootLogForRclc);
+    const { entries, warnings, skipped } = buildLootEntries(rows, rosterForRclc, responseMap, existingKeys);
 
-    // Count error rows among the newly imported entries so the UI can warn the user
+    if (entries.length) await appendLootEntries(db, teamId, entries);
+
     const errorRows = {
       noRosterMatch:   entries.filter(e => !e.recipientCharId).length,
       wrongDifficulty: entries.filter(e => !TRACKED_DIFF.has(e.difficulty)).length,

@@ -3,24 +3,28 @@
  *
  * GET    /api/roster
  * POST   /api/roster
- * GET    /api/roster/:charName
+ * GET    /api/roster/:charId
  * POST   /api/roster/owner-nick
- * POST   /api/roster/:charName/owner
- * DELETE /api/roster/:charName/owner
- * POST   /api/roster/:charName/status
- * DELETE /api/roster/:charName
+ * POST   /api/roster/:charId/owner
+ * DELETE /api/roster/:charId/owner
+ * POST   /api/roster/:charId/status
+ * POST   /api/roster/:charId/rename
+ * DELETE /api/roster/:charId
+ * POST   /api/roster/:charId/secondary-specs
+ * POST   /api/roster/:charId/spec-change
  */
 
 import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getRoster, getLootLog, getBisSubmissions,
-  getEffectiveDefaultBis, getItemDb, applyRaidBisInference,
-  getWornBis, primeTeamCache,
+  getEffectiveDefaultBis, getItemDb,
+  getWornBis,
   setRosterStatus, setOwnerNick, setRosterOwner, addRosterChar, deleteRosterChar,
   renameRosterChar, setRosterServer, setSecondarySpecs,
   approvePrimarySpecChange, rejectPrimarySpecChange,
-} from '../../../lib/sheets.js';
+} from '../../../lib/db.js';
+import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getCharSpecs } from '../../../lib/specs.js';
 
 const TANK_SPECS   = new Set(['Blood DK', 'Vengeance DH', 'Guardian Druid', 'Brewmaster Monk', 'Prot Paladin', 'Prot Warrior']);
@@ -41,6 +45,37 @@ function specToRole(spec) {
   return 'Melee DPS';
 }
 
+/** Normalise a raw D1 bis_submissions row to camelCase for the client. */
+function normalizeBisSub(s) {
+  return {
+    slot:          s.slot,
+    spec:          s.spec         ?? '',
+    status:        s.status       ?? '',
+    trueBis:       s.true_bis     ?? '',
+    trueBisItemId: s.true_bis_item_id ?? '',
+    raidBis:       s.raid_bis     ?? '',
+    raidBisItemId: s.raid_bis_item_id ?? '',
+    rationale:     s.rationale    ?? '',
+    officerNote:   s.officer_note ?? '',
+  };
+}
+
+/**
+ * If the renamed character belongs to the currently logged-in user, update their
+ * session's chars array and active charName so the dashboard tabs stay in sync
+ * without requiring a re-login.
+ */
+function patchSessionAfterRename(c, charId, newName) {
+  const session = c.get('session');
+  if (!session?.user) return;
+  session.user.chars = (session.user.chars ?? []).map(ch =>
+    ch.charId === charId ? { ...ch, charName: newName } : ch
+  );
+  if (session.user.charId === charId) {
+    session.user.charName = newName;
+  }
+}
+
 const router = new Hono();
 router.use('*', requireAuth);
 router.use('*', async (c, next) => {
@@ -49,16 +84,29 @@ router.use('*', async (c, next) => {
 });
 
 router.get('/', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  if (!teamSheetId) return c.json([]);
+  const { teamId } = c.get('session').user;
+  if (!teamId) return c.json([]);
+  const db = c.env.DB;
   try {
-    const roster = await getRoster(teamSheetId);
-    const sorted = [...roster].sort((a, b) => {
-      const ai = a.status === 'Inactive' ? 1 : 0;
-      const bi = b.status === 'Inactive' ? 1 : 0;
-      if (ai !== bi) return ai - bi;
-      return a.charName.localeCompare(b.charName);
-    });
+    const roster = await getRoster(db, teamId);
+    const sorted = [...roster]
+      .sort((a, b) => {
+        const ai = a.status === 'Inactive' ? 1 : 0;
+        const bi = b.status === 'Inactive' ? 1 : 0;
+        if (ai !== bi) return ai - bi;
+        return a.char_name.localeCompare(b.char_name);
+      })
+      .map(r => ({
+        charId:    r.id,
+        charName:  r.char_name,
+        class:     r.class,
+        spec:      r.spec,
+        role:      r.role,
+        status:    r.status,
+        ownerId:   r.owner_id   ?? '',
+        ownerNick: r.owner_nick ?? '',
+        server:    r.server     ?? '',
+      }));
     return c.json(sorted);
   } catch (err) {
     console.error('[ROSTER] Error:', err);
@@ -67,7 +115,7 @@ router.get('/', async (c) => {
 });
 
 router.post('/', async (c) => {
-  const { teamSheetId } = c.get('session').user;
+  const { teamId } = c.get('session').user;
   const {
     charName, class: cls, spec, status = 'Active', ownerId = '', ownerNick = '',
     server = '',
@@ -80,9 +128,10 @@ router.post('/', async (c) => {
   if (!CLASS_SPECS[cls]?.includes(spec)) return c.json({ error: 'Invalid class/spec combination' }, 400);
   if (!['Active', 'Bench', 'Inactive'].includes(status)) return c.json({ error: 'Invalid status' }, 400);
 
+  const db = c.env.DB;
   try {
-    const roster   = await getRoster(teamSheetId);
-    const existing = roster.find(r => r.charName.toLowerCase() === charName.trim().toLowerCase());
+    const roster   = await getRoster(db, teamId);
+    const existing = roster.find(r => r.char_name.toLowerCase() === charName.trim().toLowerCase());
 
     if (existing) {
       const incomingServer = server.trim();
@@ -94,27 +143,26 @@ router.post('/', async (c) => {
       if (alreadyDisambiguated) {
         // Both chars have distinct servers — no resolution dialog needed, fall through to add
       } else if (resolveConflictCharId && incomingServer) {
-        // Explicit conflict resolution: set server on existing char, then add new char below
-        await setRosterServer(teamSheetId, resolveConflictCharId, resolveConflictServer.trim());
+        await setRosterServer(db, Number(resolveConflictCharId), resolveConflictServer.trim());
       } else {
-        // First attempt at this name — return structured conflict so the UI can ask for servers
         return c.json({
-          conflict:          true,
-          existingCharId:    existing.charId,
-          existingCharName:  existing.charName,
-          existingServer:    existing.server ?? '',
+          conflict:         true,
+          existingCharId:   existing.id,
+          existingCharName: existing.char_name,
+          existingServer:   existing.server ?? '',
         }, 409);
       }
     }
 
-    const role            = specToRole(spec.trim());
-    const resolvedOwnerId = ownerId.trim();
-    const resolvedNick    = ownerNick.trim();
-    const charId          = await addRosterChar(teamSheetId, charName.trim(), cls.trim(), spec.trim(), role, status, server.trim());
-    if (resolvedOwnerId) {
-      await setRosterOwner(teamSheetId, charName.trim(), resolvedOwnerId, resolvedNick);
+    const role   = specToRole(spec.trim());
+    const newId  = await addRosterChar(db, teamId, {
+      charName: charName.trim(), cls: cls.trim(), spec: spec.trim(),
+      role, status, server: server.trim(),
+    });
+    if (ownerId.trim()) {
+      await setRosterOwner(db, newId, ownerId.trim(), ownerNick.trim());
     }
-    return c.json({ charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: resolvedOwnerId, ownerNick: resolvedNick, charId, server: server.trim() });
+    return c.json({ charId: newId, charName: charName.trim(), class: cls.trim(), spec: spec.trim(), role, status, ownerId: ownerId.trim(), ownerNick: ownerNick.trim(), server: server.trim() });
   } catch (err) {
     console.error('[ROSTER] Add character error:', err);
     return c.json({ error: 'Failed to add character' }, 500);
@@ -124,12 +172,13 @@ router.post('/', async (c) => {
 router.get('/owner-nick', async (c) => c.json({ error: 'Use POST' }, 405));
 
 router.post('/owner-nick', async (c) => {
-  const { teamSheetId } = c.get('session').user;
+  const { teamId } = c.get('session').user;
   const { ownerId, ownerNick } = await c.req.json();
-  if (!ownerId)             return c.json({ error: 'ownerId is required' }, 400);
-  if (!ownerNick?.trim())   return c.json({ error: 'ownerNick is required' }, 400);
+  if (!ownerId)           return c.json({ error: 'ownerId is required' }, 400);
+  if (!ownerNick?.trim()) return c.json({ error: 'ownerNick is required' }, 400);
+  const db = c.env.DB;
   try {
-    await setOwnerNick(teamSheetId, ownerId, ownerNick.trim());
+    await setOwnerNick(db, teamId, ownerId, ownerNick.trim());
     return c.json({ ok: true, ownerId, ownerNick: ownerNick.trim() });
   } catch (err) {
     console.error('[ROSTER] Owner nick update error:', err);
@@ -137,83 +186,77 @@ router.post('/owner-nick', async (c) => {
   }
 });
 
-router.get('/:charName', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const charName        = c.req.param('charName');
-  if (!teamSheetId) return c.json({ error: 'No team' }, 404);
+router.get('/:charId', async (c) => {
+  const { teamId } = c.get('session').user;
+  const charId     = Number(c.req.param('charId'));
+  if (!teamId || !charId) return c.json({ error: 'No team' }, 404);
+  const db = c.env.DB;
   try {
-    const [, effectiveBis, itemDb] = await Promise.all([
-      primeTeamCache(teamSheetId, ['roster', 'lootLog', 'bisSubmissions', 'wornBis']),
-      getEffectiveDefaultBis(),
-      getItemDb(),
+    const [roster, lootLog, bisSubmissions, wornBisMap, effectiveBis, itemDb] = await Promise.all([
+      getRoster(db, teamId), getLootLog(db, teamId), getBisSubmissions(db, teamId),
+      getWornBis(db, teamId), getEffectiveDefaultBis(db), getItemDb(db),
     ]);
-    const [roster, lootLog, bisSubmissions, wornBisMap] = await Promise.all([
-      getRoster(teamSheetId), getLootLog(teamSheetId), getBisSubmissions(teamSheetId),
-      getWornBis(teamSheetId),
-    ]);
-    const rosterChar = roster.find(r => r.charName.toLowerCase() === charName.toLowerCase());
+    const rosterChar = roster.find(r => r.id === charId);
     if (!rosterChar) return c.json({ error: 'Character not found' }, 404);
 
     const itemIdByName = new Map();
-    for (const item of itemDb) if (item.name) itemIdByName.set(item.name.toLowerCase(), item.itemId);
+    for (const item of itemDb) if (item.name) itemIdByName.set(item.name.toLowerCase(), item.item_id);
 
-    const accountCharNames = rosterChar.ownerId
-      ? roster.filter(r => r.ownerId === rosterChar.ownerId).map(r => r.charName)
-      : [charName];
+    const accountCharIds = rosterChar.owner_id
+      ? roster.filter(r => r.owner_id === rosterChar.owner_id).map(r => r.id)
+      : [rosterChar.id];
+    const accountCharNames = rosterChar.owner_id
+      ? roster.filter(r => r.owner_id === rosterChar.owner_id).map(r => r.char_name)
+      : [rosterChar.char_name];
 
     const loot = lootLog
-      .filter(e => rosterChar.charId && e.recipientCharId
-        ? e.recipientCharId === rosterChar.charId
-        : (e.recipientChar ?? '').toLowerCase() === charName.toLowerCase())
+      .filter(e => e.recipient_char_id === rosterChar.id)
       .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .map(e => ({ ...e, itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '' }));
+      .map(e => ({ ...e, itemId: itemIdByName.get((e.item_name ?? '').toLowerCase()) ?? '' }));
 
-    const accountLoot = accountCharNames.length > 1
+    const accountLoot = accountCharIds.length > 1
       ? lootLog
-          .filter(e => accountCharNames.includes(e.recipientChar))
+          .filter(e => accountCharIds.includes(e.recipient_char_id))
           .sort((a, b) => new Date(b.date) - new Date(a.date))
-          .map(e => ({ ...e, itemId: itemIdByName.get((e.itemName ?? '').toLowerCase()) ?? '' }))
+          .map(e => ({ ...e, itemId: itemIdByName.get((e.item_name ?? '').toLowerCase()) ?? '' }))
       : [];
 
     const charSpecs = getCharSpecs(rosterChar);
 
-    // Build BIS data per spec (approved submissions + spec defaults)
-    const charApprovedBis = bisSubmissions.filter(s =>
-      s.status === 'Approved' &&
-      (rosterChar.charId && s.charId ? s.charId === rosterChar.charId : s.charName.toLowerCase() === charName.toLowerCase())
-    );
+    // All approved BIS for this character, normalised to camelCase for the client
+    const charApprovedBis = bisSubmissions
+      .filter(s => s.status === 'Approved' && s.char_id === rosterChar.id)
+      .map(normalizeBisSub);
 
-    const bisBySpec = {};
+    const bisBySpec      = {};
     const defaultsBySpec = {};
     for (const spec of charSpecs.all) {
       const canonSpec = toCanonical(spec);
       const specRows  = effectiveBis.filter(d => d.spec === canonSpec);
-      defaultsBySpec[spec] = applyRaidBisInference(specRows, itemDb);
+      defaultsBySpec[spec] = applyRaidBisInference(specRows, itemDb); // already camelCase
       bisBySpec[spec] = charApprovedBis.filter(s =>
         s.spec ? s.spec.toLowerCase() === spec.toLowerCase() : spec === charSpecs.primary
       );
     }
 
-    // Primary spec convenience fields (backward compat)
     const approvedBis  = bisBySpec[charSpecs.primary] ?? [];
     const specDefaults = defaultsBySpec[charSpecs.primary] ?? [];
 
-    // Build wornBisBySpec: { [spec]: { [slot]: { overallBISTrack, raidBISTrack, otherTrack } } }
     const wornBisBySpec = {};
-    for (const row of wornBisMap.values()) {
-      if (row.charId !== rosterChar.charId) continue;
+    for (const [key, row] of wornBisMap) {
+      if (row.char_id !== rosterChar.id) continue;
       if (!wornBisBySpec[row.spec]) wornBisBySpec[row.spec] = {};
       wornBisBySpec[row.spec][row.slot] = {
-        overallBISTrack: row.overallBISTrack ?? '',
-        raidBISTrack:    row.raidBISTrack    ?? '',
-        otherTrack:      row.otherTrack      ?? '',
+        overallBISTrack: row.overall_bis_track ?? '',
+        raidBISTrack:    row.raid_bis_track    ?? '',
+        otherTrack:      row.other_track       ?? '',
       };
     }
 
     return c.json({
-      charName: rosterChar.charName, charId: rosterChar.charId,
+      charName: rosterChar.char_name, charId: rosterChar.id,
       class: rosterChar.class, spec: rosterChar.spec,
-      role: rosterChar.role, status: rosterChar.status, ownerNick: rosterChar.ownerNick,
+      role: rosterChar.role, status: rosterChar.status, ownerNick: rosterChar.owner_nick,
       secondarySpecs:     charSpecs.secondary,
       pendingPrimarySpec: charSpecs.pending,
       bis: approvedBis, specDefaults,
@@ -226,63 +269,73 @@ router.get('/:charName', async (c) => {
   }
 });
 
-router.post('/:charName/owner', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const charName        = c.req.param('charName');
-  const { ownerId, ownerNick = '', charId = null } = await c.req.json();
+router.post('/:charId/owner', async (c) => {
+  const { teamId }  = c.get('session').user;
+  const charId      = Number(c.req.param('charId'));
+  const { ownerId, ownerNick = '' } = await c.req.json();
   if (!ownerId?.trim()) return c.json({ error: 'ownerId is required' }, 400);
+  const db = c.env.DB;
   try {
-    await setRosterOwner(teamSheetId, charName, ownerId.trim(), ownerNick.trim(), charId);
-    return c.json({ ok: true, charName, ownerId: ownerId.trim(), ownerNick: ownerNick.trim() });
+    const roster = await getRoster(db, teamId);
+    const target = roster.find(r => r.id === charId);
+    if (!target) return c.json({ error: 'Character not found' }, 404);
+    await setRosterOwner(db, target.id, ownerId.trim(), ownerNick.trim());
+    return c.json({ ok: true, charName: target.char_name, ownerId: ownerId.trim(), ownerNick: ownerNick.trim() });
   } catch (err) {
     console.error('[ROSTER] Set owner error:', err);
     return c.json({ error: 'Failed to link Discord account' }, 500);
   }
 });
 
-router.delete('/:charName/owner', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const charName        = c.req.param('charName');
-  const body            = await c.req.json().catch(() => ({}));
-  const charId          = body?.charId ?? null;
+router.delete('/:charId/owner', async (c) => {
+  const { teamId } = c.get('session').user;
+  const charId     = Number(c.req.param('charId'));
+  const db = c.env.DB;
   try {
-    await setRosterOwner(teamSheetId, charName, '', '', charId);
-    return c.json({ ok: true, charName });
+    const roster = await getRoster(db, teamId);
+    const target = roster.find(r => r.id === charId);
+    if (!target) return c.json({ error: 'Character not found' }, 404);
+    await setRosterOwner(db, target.id, '', '');
+    return c.json({ ok: true, charName: target.char_name });
   } catch (err) {
     console.error('[ROSTER] Clear owner error:', err);
     return c.json({ error: 'Failed to clear Discord account' }, 500);
   }
 });
 
-router.post('/:charName/status', async (c) => {
-  const { teamSheetId }       = c.get('session').user;
-  const charName              = c.req.param('charName');
-  const { status, charId = null } = await c.req.json();
+router.post('/:charId/status', async (c) => {
+  const { teamId } = c.get('session').user;
+  const charId     = Number(c.req.param('charId'));
+  const { status } = await c.req.json();
   if (!['Active', 'Bench', 'Inactive'].includes(status)) return c.json({ error: 'status must be Active, Bench, or Inactive' }, 400);
+  const db = c.env.DB;
   try {
-    await setRosterStatus(teamSheetId, charName, status, charId);
-    return c.json({ ok: true, charName, status });
+    const roster = await getRoster(db, teamId);
+    const target = roster.find(r => r.id === charId);
+    if (!target) return c.json({ error: 'Character not found' }, 404);
+    await setRosterStatus(db, target.id, status);
+    return c.json({ ok: true, charName: target.char_name, status });
   } catch (err) {
     console.error('[ROSTER] Status update error:', err);
     return c.json({ error: 'Failed to update status' }, 500);
   }
 });
 
-router.post('/:charName/rename', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const charName        = c.req.param('charName');
+router.post('/:charId/rename', async (c) => {
+  const { teamId } = c.get('session').user;
+  const charId     = Number(c.req.param('charId'));
   const {
     newName,
     server = '',
     resolveConflictCharId = '', resolveConflictServer = '',
   } = await c.req.json();
   if (!newName?.trim()) return c.json({ error: 'newName is required' }, 400);
+  const db = c.env.DB;
   try {
-    const roster  = await getRoster(teamSheetId);
-    const target  = roster.find(r => r.charName.toLowerCase() === charName.toLowerCase());
+    const roster   = await getRoster(db, teamId);
+    const target   = roster.find(r => r.id === charId);
     if (!target) return c.json({ error: 'Character not found' }, 404);
-    if (!target.charId) return c.json({ error: 'Character has no charId — run the migration script first' }, 409);
-    const conflict = roster.find(r => r.charName.toLowerCase() === newName.trim().toLowerCase() && r.charId !== target.charId);
+    const conflict = roster.find(r => r.char_name.toLowerCase() === newName.trim().toLowerCase() && r.id !== target.id);
     if (conflict) {
       const incomingServer = server.trim();
       const conflictServer = (conflict.server ?? '').trim();
@@ -293,61 +346,58 @@ router.post('/:charName/rename', async (c) => {
       if (alreadyDisambiguated) {
         // Both chars have distinct servers — no resolution dialog needed, fall through
       } else if (resolveConflictCharId && incomingServer) {
-        // Explicit conflict resolution: set server on existing char + renamed char, then rename
-        await setRosterServer(teamSheetId, resolveConflictCharId, resolveConflictServer.trim());
-        await setRosterServer(teamSheetId, target.charId, incomingServer);
-        await renameRosterChar(teamSheetId, target.charId, newName.trim());
-        return c.json({ ok: true, charId: target.charId, oldName: charName, newName: newName.trim(), server: incomingServer });
+        await setRosterServer(db, Number(resolveConflictCharId), resolveConflictServer.trim());
+        await setRosterServer(db, target.id, incomingServer);
+        await renameRosterChar(db, target.id, newName.trim());
+        patchSessionAfterRename(c, target.id, newName.trim());
+        return c.json({ ok: true, charId: target.id, oldName: target.char_name, newName: newName.trim(), server: incomingServer });
       } else {
-        // First attempt — return structured conflict so the UI can ask for servers
         return c.json({
           conflict:         true,
-          existingCharId:   conflict.charId,
-          existingCharName: conflict.charName,
+          existingCharId:   conflict.id,
+          existingCharName: conflict.char_name,
           existingServer:   conflict.server  ?? '',
           targetServer:     target.server    ?? '',
         }, 409);
       }
     }
-    await renameRosterChar(teamSheetId, target.charId, newName.trim());
-    await setRosterServer(teamSheetId, target.charId, server.trim());
-    return c.json({ ok: true, charId: target.charId, oldName: charName, newName: newName.trim(), server: server.trim() });
+    await renameRosterChar(db, target.id, newName.trim());
+    await setRosterServer(db, target.id, server.trim());
+    patchSessionAfterRename(c, target.id, newName.trim());
+    return c.json({ ok: true, charId: target.id, oldName: target.char_name, newName: newName.trim(), server: server.trim() });
   } catch (err) {
     console.error('[ROSTER] Rename error:', err);
     return c.json({ error: 'Failed to rename character' }, 500);
   }
 });
 
-router.delete('/:charName', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const charName        = c.req.param('charName');
-  const body            = await c.req.json().catch(() => ({}));
-  const charId          = body?.charId ?? null;
+router.delete('/:charId', async (c) => {
+  const { teamId } = c.get('session').user;
+  const charId     = Number(c.req.param('charId'));
+  const db = c.env.DB;
   try {
-    await deleteRosterChar(teamSheetId, charName, charId);
-    return c.json({ ok: true, charName });
+    const roster = await getRoster(db, teamId);
+    const target = roster.find(r => r.id === charId);
+    if (!target) return c.json({ error: 'Character not found' }, 404);
+    await deleteRosterChar(db, target.id);
+    return c.json({ ok: true, charName: target.char_name });
   } catch (err) {
     console.error('[ROSTER] Delete error:', err);
     return c.json({ error: 'Failed to delete character' }, 500);
   }
 });
 
-// ── POST /api/roster/:charName/secondary-specs ─────────────────────────────────
-// Officer sets the secondary spec list for a character.
-
-router.post('/:charName/secondary-specs', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const charName        = c.req.param('charName');
-  const { specs = [], charId = null } = await c.req.json();
+router.post('/:charId/secondary-specs', async (c) => {
+  const { teamId } = c.get('session').user;
+  const charId     = Number(c.req.param('charId'));
+  const { specs = [] } = await c.req.json();
   if (!Array.isArray(specs)) return c.json({ error: 'specs must be an array' }, 400);
 
+  const db = c.env.DB;
   try {
-    const roster      = await getRoster(teamSheetId);
-    const rosterChar  = roster.find(r =>
-      charId && r.charId ? r.charId === charId : r.charName.toLowerCase() === charName.toLowerCase()
-    );
+    const roster     = await getRoster(db, teamId);
+    const rosterChar = roster.find(r => r.id === charId);
     if (!rosterChar) return c.json({ error: 'Character not found' }, 404);
-    if (!rosterChar.charId) return c.json({ error: 'Character has no charId — run the migration script first' }, 409);
 
     const classSpecs = CLASS_SPECS[rosterChar.class] ?? [];
     for (const s of specs) {
@@ -357,29 +407,26 @@ router.post('/:charName/secondary-specs', async (c) => {
         return c.json({ error: `"${s}" is already the primary spec — cannot be secondary` }, 400);
     }
 
-    await setSecondarySpecs(teamSheetId, rosterChar.charId, specs);
-    return c.json({ ok: true, charName: rosterChar.charName, secondarySpecs: specs });
+    await setSecondarySpecs(db, rosterChar.id, specs);
+    return c.json({ ok: true, charName: rosterChar.char_name, secondarySpecs: specs });
   } catch (err) {
     console.error('[ROSTER] Secondary specs error:', err);
     return c.json({ error: 'Failed to update secondary specs' }, 500);
   }
 });
 
-// ── POST /api/roster/:charName/spec-change ─────────────────────────────────────
-// Officer approves or rejects a pending primary spec change (mirrors BIS review endpoint).
-
-router.post('/:charName/spec-change', async (c) => {
-  const { teamSheetId } = c.get('session').user;
-  const charName        = c.req.param('charName');
-  const { charId, approve } = await c.req.json();
+router.post('/:charId/spec-change', async (c) => {
+  const charId     = Number(c.req.param('charId'));
+  const { approve } = await c.req.json();
   if (!charId)               return c.json({ error: 'charId is required' }, 400);
   if (approve === undefined) return c.json({ error: 'approve (bool) is required' }, 400);
+  const db = c.env.DB;
   try {
     if (approve) {
-      const { oldSpec, newSpec } = await approvePrimarySpecChange(teamSheetId, charId);
-      return c.json({ ok: true, oldSpec, newSpec });
+      await approvePrimarySpecChange(db, charId);
+      return c.json({ ok: true });
     } else {
-      await rejectPrimarySpecChange(teamSheetId, charId);
+      await rejectPrimarySpecChange(db, charId);
       return c.json({ ok: true });
     }
   } catch (err) {

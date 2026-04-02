@@ -74,7 +74,7 @@ export default function Admin() {
 
   return (
     <div>
-      <h2 className="page-title">Admin</h2>
+      <h2 className="page-title">Logs</h2>
 
       <div className="card">
         <div className="card-title">WCL Sync</div>
