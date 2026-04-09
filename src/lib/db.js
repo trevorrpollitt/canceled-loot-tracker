@@ -17,6 +17,59 @@ const all   = (db, sql, ...args) => db.prepare(sql).bind(...args).all().then(r =
 const first = (db, sql, ...args) => db.prepare(sql).bind(...args).first();
 const run   = (db, sql, ...args) => db.prepare(sql).bind(...args).run();
 
+// ── In-process TTL cache ──────────────────────────────────────────────────────
+// Reduces D1 row reads for requests handled by the same Worker isolate.
+// Cloudflare keeps isolates alive between requests (up to 30 s idle), so this
+// effectively caches across rapid sequential requests from the same user/team.
+//
+// TTLs — tuned to how often each table changes in practice:
+//   LONG   (5 min)  item_db, default_bis, spec_bis_config, tier_items
+//   MEDIUM (2 min)  global_config, default_bis_overrides
+//   SHORT  (60 s)   team_config, roster, rclc_map, raids, tier_snapshot, worn_bis
+//   BRIEF  (30 s)   bis_submissions, loot_log
+
+const _cache    = new Map(); // key → { value, expiresAt }
+const _inflight = new Map(); // key → Promise  (in-flight dedup: concurrent reads share one query)
+
+const TTL = {
+  LONG:   5 * 60_000,
+  MEDIUM: 2 * 60_000,
+  SHORT:  60_000,
+  BRIEF:  30_000,
+};
+
+function cacheGet(key) {
+  const hit = _cache.get(key);
+  return (hit && Date.now() < hit.expiresAt) ? hit.value : null;
+}
+
+function cacheSet(key, value, ttl) {
+  _cache.set(key, { value, expiresAt: Date.now() + ttl });
+}
+
+/** Exact-key invalidation. Pass multiple keys to invalidate several at once. */
+function cacheInvalidate(...keys) {
+  for (const key of keys) _cache.delete(key);
+}
+
+/** Prefix invalidation — use when teamId is not available at the write site. */
+function cacheInvalidatePrefix(prefix) {
+  for (const key of _cache.keys()) {
+    if (key.startsWith(prefix)) _cache.delete(key);
+  }
+}
+
+async function cachedRead(key, ttl, loader) {
+  const hit = cacheGet(key);
+  if (hit !== null) return hit;
+  if (_inflight.has(key)) return _inflight.get(key);
+  const promise = loader()
+    .then(value => { cacheSet(key, value, ttl); _inflight.delete(key); return value; })
+    .catch(err  => { _inflight.delete(key); throw err; });
+  _inflight.set(key, promise);
+  return promise;
+}
+
 // ── Teams ─────────────────────────────────────────────────────────────────────
 
 export async function getAllTeams(db) {
@@ -30,15 +83,19 @@ export async function getTeamByName(db, name) {
 // ── Global config ─────────────────────────────────────────────────────────────
 
 export async function getGlobalConfig(db) {
-  const rows = await all(db, 'SELECT key, value FROM global_config');
-  return Object.fromEntries(rows.map(r => [r.key, r.value]));
+  return cachedRead('global_config', TTL.MEDIUM, async () => {
+    const rows = await all(db, 'SELECT key, value FROM global_config');
+    return Object.fromEntries(rows.map(r => [r.key, r.value]));
+  });
 }
 
 // ── Team config ───────────────────────────────────────────────────────────────
 
 export async function getTeamConfig(db, teamId) {
-  const rows = await all(db, 'SELECT key, value FROM team_config WHERE team_id = ?', teamId);
-  return Object.fromEntries(rows.map(r => [r.key, r.value]));
+  return cachedRead(`team_config:${teamId}`, TTL.SHORT, async () => {
+    const rows = await all(db, 'SELECT key, value FROM team_config WHERE team_id = ?', teamId);
+    return Object.fromEntries(rows.map(r => [r.key, r.value]));
+  });
 }
 
 export async function setTeamConfigValue(db, teamId, key, value) {
@@ -46,6 +103,7 @@ export async function setTeamConfigValue(db, teamId, key, value) {
     'INSERT INTO team_config (team_id, key, value) VALUES (?, ?, ?) ON CONFLICT(team_id, key) DO UPDATE SET value = excluded.value',
     teamId, key, String(value)
   );
+  cacheInvalidate(`team_config:${teamId}`);
 }
 
 export async function setGlobalConfigValue(db, key, value) {
@@ -53,13 +111,16 @@ export async function setGlobalConfigValue(db, key, value) {
     'INSERT INTO global_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
     key, String(value)
   );
+  cacheInvalidate('global_config');
 }
 
 /** Returns RCLC response map as a plain array (for serialisation). */
 export async function getRclcResponseMapRows(db, teamId) {
-  return all(db,
-    'SELECT rclc_button, internal_type, counted_in_totals FROM rclc_response_map WHERE team_id = ? ORDER BY rclc_button',
-    teamId,
+  return cachedRead(`rclc_map:${teamId}`, TTL.SHORT, () =>
+    all(db,
+      'SELECT rclc_button, internal_type, counted_in_totals FROM rclc_response_map WHERE team_id = ? ORDER BY rclc_button',
+      teamId,
+    )
   );
 }
 
@@ -75,6 +136,7 @@ export async function setRclcResponseMap(db, teamId, entries) {
       teamId, button, internalType, counted ? 1 : 0,
     );
   }
+  cacheInvalidate(`rclc_map:${teamId}`);
 }
 
 // ── Roster ────────────────────────────────────────────────────────────────────
@@ -88,11 +150,13 @@ function parseRosterRow(r) {
 }
 
 export async function getRoster(db, teamId) {
-  const rows = await all(db,
-    'SELECT * FROM roster WHERE team_id = ? ORDER BY char_name',
-    teamId
-  );
-  return rows.map(parseRosterRow);
+  return cachedRead(`roster:${teamId}`, TTL.SHORT, async () => {
+    const rows = await all(db,
+      'SELECT * FROM roster WHERE team_id = ? ORDER BY char_name',
+      teamId
+    );
+    return rows.map(parseRosterRow);
+  });
 }
 
 export async function getRosterMember(db, id) {
@@ -113,23 +177,28 @@ export async function addRosterChar(db, teamId, { charName, cls, spec, role, sta
     'INSERT INTO roster (team_id, char_name, class, spec, role, status, server) VALUES (?, ?, ?, ?, ?, ?, ?)',
     teamId, charName, cls, spec, role, status, server
   );
+  cacheInvalidate(`roster:${teamId}`);
   return result.meta.last_row_id;
 }
 
 export async function deleteRosterChar(db, id) {
   await run(db, 'DELETE FROM roster WHERE id = ?', id);
+  cacheInvalidatePrefix('roster:');
 }
 
 export async function renameRosterChar(db, id, newName) {
   await run(db, 'UPDATE roster SET char_name = ? WHERE id = ?', newName, id);
+  cacheInvalidatePrefix('roster:');
 }
 
 export async function setRosterStatus(db, id, status) {
   await run(db, 'UPDATE roster SET status = ? WHERE id = ?', status, id);
+  cacheInvalidatePrefix('roster:');
 }
 
 export async function setRosterOwner(db, id, ownerId, ownerNick) {
   await run(db, 'UPDATE roster SET owner_id = ?, owner_nick = ? WHERE id = ?', ownerId, ownerNick, id);
+  cacheInvalidatePrefix('roster:');
 }
 
 export async function setOwnerNick(db, teamId, ownerId, ownerNick) {
@@ -137,10 +206,12 @@ export async function setOwnerNick(db, teamId, ownerId, ownerNick) {
     'UPDATE roster SET owner_nick = ? WHERE team_id = ? AND owner_id = ?',
     ownerNick, teamId, ownerId
   );
+  cacheInvalidate(`roster:${teamId}`);
 }
 
 export async function setRosterServer(db, id, server) {
   await run(db, 'UPDATE roster SET server = ? WHERE id = ?', server, id);
+  cacheInvalidatePrefix('roster:');
 }
 
 export async function setSecondarySpecs(db, id, specs) {
@@ -148,10 +219,12 @@ export async function setSecondarySpecs(db, id, specs) {
     'UPDATE roster SET secondary_specs = ? WHERE id = ?',
     specs.join('|'), id
   );
+  cacheInvalidatePrefix('roster:');
 }
 
 export async function setPendingPrimarySpec(db, id, spec) {
   await run(db, 'UPDATE roster SET pending_primary_spec = ? WHERE id = ?', spec, id);
+  cacheInvalidatePrefix('roster:');
 }
 
 export async function approvePrimarySpecChange(db, id) {
@@ -161,10 +234,12 @@ export async function approvePrimarySpecChange(db, id) {
     'UPDATE roster SET spec = ?, pending_primary_spec = ? WHERE id = ?',
     char.pending_primary_spec, '', id
   );
+  cacheInvalidatePrefix('roster:');
 }
 
 export async function rejectPrimarySpecChange(db, id) {
   await run(db, 'UPDATE roster SET pending_primary_spec = ? WHERE id = ?', '', id);
+  cacheInvalidatePrefix('roster:');
 }
 
 // ── Loot log ──────────────────────────────────────────────────────────────────
@@ -174,18 +249,21 @@ function parseLootRow(r) {
 }
 
 export async function getLootLog(db, teamId) {
-  const rows = await all(db,
-    `SELECT l.*, r.char_name AS resolved_char_name
-     FROM loot_log l
-     LEFT JOIN roster r ON r.id = l.recipient_char_id
-     WHERE l.team_id = ?
-     ORDER BY l.date DESC`,
-    teamId
-  );
-  return rows.map(parseLootRow);
+  return cachedRead(`loot_log:${teamId}`, TTL.BRIEF, async () => {
+    const rows = await all(db,
+      `SELECT l.*, r.char_name AS resolved_char_name
+       FROM loot_log l
+       LEFT JOIN roster r ON r.id = l.recipient_char_id
+       WHERE l.team_id = ?
+       ORDER BY l.date DESC`,
+      teamId
+    );
+    return rows.map(parseLootRow);
+  });
 }
 
 export async function appendLootEntries(db, teamId, entries) {
+  cacheInvalidate(`loot_log:${teamId}`);
   if (!entries.length) return;
   const stmt = db.prepare(
     `INSERT INTO loot_log (team_id, date, boss, item_name, difficulty, recipient_id, recipient_name, recipient_char_id, upgrade_type, notes)
@@ -207,12 +285,14 @@ export async function patchLootEntryDifficulties(db, corrections) {
   for (const { id, difficulty } of corrections) {
     await stmt.bind(difficulty, id).run();
   }
+  cacheInvalidatePrefix('loot_log:');
 }
 
 export async function patchLootEntryIgnored(db, ids, ignored) {
   const val = ignored ? 1 : 0;
   const placeholders = ids.map(() => '?').join(', ');
   await run(db, `UPDATE loot_log SET ignored = ? WHERE id IN (${placeholders})`, val, ...ids);
+  cacheInvalidatePrefix('loot_log:');
 }
 
 export async function reassignLootEntries(db, assignments) {
@@ -226,6 +306,7 @@ export async function reassignLootEntries(db, assignments) {
   for (const { id, rosterId } of assignments) {
     await stmt.bind(rosterId, rosterId, rosterId, id).run();
   }
+  cacheInvalidatePrefix('loot_log:');
 }
 
 export async function backfillLootEntryIds(db, teamId) {
@@ -241,14 +322,17 @@ export async function backfillLootEntryIds(db, teamId) {
      WHERE team_id = ? AND recipient_char_id IS NULL AND recipient_name != ''`,
     teamId
   );
+  cacheInvalidate(`loot_log:${teamId}`);
 }
 
 // ── BIS submissions ───────────────────────────────────────────────────────────
 
 export async function getBisSubmissions(db, teamId) {
-  return all(db,
-    'SELECT * FROM bis_submissions WHERE team_id = ? ORDER BY submitted_at DESC',
-    teamId
+  return cachedRead(`bis_submissions:${teamId}`, TTL.BRIEF, () =>
+    all(db,
+      'SELECT * FROM bis_submissions WHERE team_id = ? ORDER BY submitted_at DESC',
+      teamId
+    )
   );
 }
 
@@ -266,6 +350,7 @@ export async function upsertBisSubmission(db, teamId, { charId, charName, spec, 
     raidBis ?? '', raidBisItemId || null,
     rationale ?? '', submittedAt
   );
+  cacheInvalidate(`bis_submissions:${teamId}`);
 }
 
 export async function batchUpsertBisSubmissions(db, teamId, updates) {
@@ -279,6 +364,7 @@ export async function approveBisSubmission(db, id, reviewedBy) {
     `UPDATE bis_submissions SET status = 'Approved', reviewed_by = ? WHERE id = ?`,
     reviewedBy, id
   );
+  cacheInvalidatePrefix('bis_submissions:');
 }
 
 export async function rejectBisSubmission(db, id, reviewedBy, officerNote = '') {
@@ -286,6 +372,7 @@ export async function rejectBisSubmission(db, id, reviewedBy, officerNote = '') 
     `UPDATE bis_submissions SET status = 'Rejected', reviewed_by = ?, officer_note = ? WHERE id = ?`,
     reviewedBy, officerNote, id
   );
+  cacheInvalidatePrefix('bis_submissions:');
 }
 
 export async function clearBisSubmission(db, teamId, charId, slot) {
@@ -293,6 +380,7 @@ export async function clearBisSubmission(db, teamId, charId, slot) {
     'DELETE FROM bis_submissions WHERE team_id = ? AND char_id = ? AND slot = ?',
     teamId, charId, slot
   );
+  cacheInvalidate(`bis_submissions:${teamId}`);
 }
 
 export async function clearPendingBisSubmission(db, teamId, charId, slot) {
@@ -300,6 +388,7 @@ export async function clearPendingBisSubmission(db, teamId, charId, slot) {
     `DELETE FROM bis_submissions WHERE team_id = ? AND char_id = ? AND slot = ? AND status = 'Pending'`,
     teamId, charId, slot
   );
+  cacheInvalidate(`bis_submissions:${teamId}`);
 }
 
 export async function clearRejectedBisSubmission(db, teamId, charId, slot) {
@@ -307,6 +396,7 @@ export async function clearRejectedBisSubmission(db, teamId, charId, slot) {
     `DELETE FROM bis_submissions WHERE team_id = ? AND char_id = ? AND slot = ? AND status = 'Rejected'`,
     teamId, charId, slot
   );
+  cacheInvalidate(`bis_submissions:${teamId}`);
 }
 
 export async function resetBisRaidBisField(db, teamId, charId, slot) {
@@ -314,16 +404,20 @@ export async function resetBisRaidBisField(db, teamId, charId, slot) {
     `UPDATE bis_submissions SET raid_bis = '', raid_bis_item_id = NULL WHERE team_id = ? AND char_id = ? AND slot = ?`,
     teamId, charId, slot
   );
+  cacheInvalidate(`bis_submissions:${teamId}`);
 }
 
 // ── Item DB ───────────────────────────────────────────────────────────────────
 
 export async function getItemDb(db) {
-  return all(db, 'SELECT * FROM item_db ORDER BY id');
+  return cachedRead('item_db', TTL.LONG, () =>
+    all(db, 'SELECT * FROM item_db ORDER BY id')
+  );
 }
 
 export async function writeItemDb(db, items, { replace = false } = {}) {
   if (replace) await run(db, 'DELETE FROM item_db');
+  cacheInvalidate('item_db');
   const stmt = db.prepare(
     `INSERT INTO item_db (item_id, name, slot, source_type, source_name, instance, difficulty, armor_type, is_tier_token)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -344,12 +438,16 @@ export async function writeItemDb(db, items, { replace = false } = {}) {
 // ── Default BIS ───────────────────────────────────────────────────────────────
 
 export async function getDefaultBis(db) {
-  return all(db, 'SELECT * FROM default_bis ORDER BY spec, slot');
+  return cachedRead('default_bis', TTL.LONG, () =>
+    all(db, 'SELECT * FROM default_bis ORDER BY spec, slot')
+  );
 }
 
 export async function getSpecBisConfig(db) {
-  const rows = await all(db, 'SELECT spec, source FROM spec_bis_config');
-  return new Map(rows.map(r => [r.spec, r.source]));
+  return cachedRead('spec_bis_config', TTL.LONG, async () => {
+    const rows = await all(db, 'SELECT spec, source FROM spec_bis_config');
+    return new Map(rows.map(r => [r.spec, r.source]));
+  });
 }
 
 export async function setSpecBisSource(db, spec, source) {
@@ -358,6 +456,7 @@ export async function setSpecBisSource(db, spec, source) {
      ON CONFLICT(spec) DO UPDATE SET source = excluded.source`,
     spec, source
   );
+  cacheInvalidate('spec_bis_config');
 }
 
 export async function getEffectiveDefaultBis(db) {
@@ -387,7 +486,9 @@ export async function getEffectiveDefaultBis(db) {
 // Stored in the dedicated default_bis_overrides table (spec × slot × source PK).
 
 export async function getDefaultBisOverrides(db) {
-  return all(db, 'SELECT * FROM default_bis_overrides');
+  return cachedRead('default_bis_overrides', TTL.MEDIUM, () =>
+    all(db, 'SELECT * FROM default_bis_overrides')
+  );
 }
 
 export async function updateDefaultBisOverrides(db, updates) {
@@ -405,16 +506,20 @@ export async function updateDefaultBisOverrides(db, updates) {
       u.raidBis ?? '', u.raidBisItemId || null
     );
   }
+  cacheInvalidate('default_bis_overrides');
 }
 
 // ── Tier items ────────────────────────────────────────────────────────────────
 
 export async function getTierItems(db) {
-  return all(db, 'SELECT * FROM tier_items ORDER BY class, slot');
+  return cachedRead('tier_items', TTL.LONG, () =>
+    all(db, 'SELECT * FROM tier_items ORDER BY class, slot')
+  );
 }
 
 export async function setTierItems(db, items) {
   await run(db, 'DELETE FROM tier_items');
+  cacheInvalidate('tier_items');
   const stmt = db.prepare('INSERT INTO tier_items (class, slot, item_id) VALUES (?, ?, ?)');
   for (const item of items) {
     await stmt.bind(item.class, item.slot, item.itemId).run();
@@ -424,22 +529,24 @@ export async function setTierItems(db, items) {
 // ── Raids ─────────────────────────────────────────────────────────────────────
 
 export async function getRaids(db, teamId) {
-  const raids = await all(db,
-    'SELECT * FROM raids WHERE team_id = ? ORDER BY date DESC',
-    teamId
-  );
-  const attendees = await all(db,
-    `SELECT ra.raid_id, ra.user_id FROM raid_attendees ra
-     JOIN raids r ON r.id = ra.raid_id
-     WHERE r.team_id = ?`,
-    teamId
-  );
-  const attendeeMap = new Map();
-  for (const a of attendees) {
-    if (!attendeeMap.has(a.raid_id)) attendeeMap.set(a.raid_id, []);
-    attendeeMap.get(a.raid_id).push(a.user_id);
-  }
-  return raids.map(r => ({ ...r, attendeeIds: attendeeMap.get(r.id) ?? [] }));
+  return cachedRead(`raids:${teamId}`, TTL.SHORT, async () => {
+    const raids = await all(db,
+      'SELECT * FROM raids WHERE team_id = ? ORDER BY date DESC',
+      teamId
+    );
+    const attendees = await all(db,
+      `SELECT ra.raid_id, ra.user_id FROM raid_attendees ra
+       JOIN raids r ON r.id = ra.raid_id
+       WHERE r.team_id = ?`,
+      teamId
+    );
+    const attendeeMap = new Map();
+    for (const a of attendees) {
+      if (!attendeeMap.has(a.raid_id)) attendeeMap.set(a.raid_id, []);
+      attendeeMap.get(a.raid_id).push(a.user_id);
+    }
+    return raids.map(r => ({ ...r, attendeeIds: attendeeMap.get(r.id) ?? [] }));
+  });
 }
 
 export async function upsertRaids(db, teamId, raids) {
@@ -462,6 +569,7 @@ export async function upsertRaids(db, teamId, raids) {
       await attendeeStmt.bind(row.id, userId).run();
     }
   }
+  cacheInvalidate(`raids:${teamId}`);
 }
 
 // ── Raid encounters ───────────────────────────────────────────────────────────
@@ -496,11 +604,13 @@ export async function upsertRaidEncounters(db, teamId, rows) {
 // ── Tier snapshot ─────────────────────────────────────────────────────────────
 
 export async function getTierSnapshot(db, teamId) {
-  return all(db,
-    `SELECT ts.*, r.char_name FROM tier_snapshot ts
-     JOIN roster r ON r.id = ts.char_id
-     WHERE r.team_id = ?`,
-    teamId
+  return cachedRead(`tier_snapshot:${teamId}`, TTL.SHORT, () =>
+    all(db,
+      `SELECT ts.*, r.char_name FROM tier_snapshot ts
+       JOIN roster r ON r.id = ts.char_id
+       WHERE r.team_id = ?`,
+      teamId
+    )
   );
 }
 
@@ -518,22 +628,25 @@ export async function upsertTierSnapshot(db, teamId, snapshots) {
       : null;
     await stmt.bind(snap.charId, raidRow?.id ?? null, snap.tierCount, snap.tierDetail, snap.updatedAt).run();
   }
+  cacheInvalidate(`tier_snapshot:${teamId}`);
 }
 
 // ── Worn BIS ──────────────────────────────────────────────────────────────────
 
 export async function getWornBis(db, teamId) {
-  const rows = await all(db,
-    `SELECT wb.* FROM worn_bis wb
-     JOIN roster r ON r.id = wb.char_id
-     WHERE r.team_id = ?`,
-    teamId
-  );
-  const map = new Map();
-  for (const r of rows) {
-    map.set(`${r.char_id}:${r.spec}:${r.slot}`, r);
-  }
-  return map;
+  return cachedRead(`worn_bis:${teamId}`, TTL.SHORT, async () => {
+    const rows = await all(db,
+      `SELECT wb.* FROM worn_bis wb
+       JOIN roster r ON r.id = wb.char_id
+       WHERE r.team_id = ?`,
+      teamId
+    );
+    const map = new Map();
+    for (const r of rows) {
+      map.set(`${r.char_id}:${r.spec}:${r.slot}`, r);
+    }
+    return map;
+  });
 }
 
 export async function upsertWornBis(db, teamId, rows) {
@@ -553,6 +666,7 @@ export async function upsertWornBis(db, teamId, rows) {
       row.updatedAt
     ).run();
   }
+  cacheInvalidate(`worn_bis:${teamId}`);
 }
 
 export async function clearWornBis(db, teamId) {
@@ -560,6 +674,7 @@ export async function clearWornBis(db, teamId) {
     `DELETE FROM worn_bis WHERE char_id IN (SELECT id FROM roster WHERE team_id = ?)`,
     teamId
   );
+  cacheInvalidate(`worn_bis:${teamId}`);
 }
 
 export async function invalidateWornBisSlots(db, teamId, targets) {
@@ -570,21 +685,24 @@ export async function invalidateWornBisSlots(db, teamId, targets) {
   for (const { charId, slot } of targets) {
     await stmt.bind(charId, slot).run();
   }
+  cacheInvalidate(`worn_bis:${teamId}`);
 }
 
 // ── RCLC response map ─────────────────────────────────────────────────────────
 
 export async function getRclcResponseMap(db, teamId) {
-  const rows = await all(db,
-    'SELECT * FROM rclc_response_map WHERE team_id = ?',
-    teamId
-  );
-  const map = new Map();
-  for (const r of rows) {
-    map.set(r.rclc_button, {
-      internalType: r.internal_type,
-      counted:      r.counted_in_totals === 1,
-    });
-  }
-  return map;
+  return cachedRead(`rclc_map:${teamId}`, TTL.SHORT, async () => {
+    const rows = await all(db,
+      'SELECT * FROM rclc_response_map WHERE team_id = ?',
+      teamId
+    );
+    const map = new Map();
+    for (const r of rows) {
+      map.set(r.rclc_button, {
+        internalType: r.internal_type,
+        counted:      r.counted_in_totals === 1,
+      });
+    }
+    return map;
+  });
 }
