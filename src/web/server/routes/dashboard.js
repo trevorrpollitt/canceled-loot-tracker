@@ -7,8 +7,8 @@
 import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
-  getLootLog, getBisSubmissions, getEffectiveDefaultBis, getItemDb,
-  getWornBis, getRoster, getGlobalConfig, getTierItems,
+  getLootLogForChar, getBisSubmissions, getEffectiveDefaultBisForSpec, getItemDb,
+  getWornBisForChar, getRoster, getGlobalConfig, getTierItems,
   upsertWornBis, upsertTierSnapshot,
 } from '../../../lib/db.js';
 import { toCanonical, getCharSpecs, getArmorType, buildTrackRanges, getItemTrack, mergeTrack } from '../../../lib/specs.js';
@@ -27,22 +27,24 @@ router.get('/', requireAuth, async (c) => {
   const db = c.env.DB;
 
   try {
-    const [roster, lootLog, bisSubmissions, wornBisMap, effectiveBis, itemDb] = await Promise.all([
-      getRoster(db, teamId),
-      getLootLog(db, teamId),
-      getBisSubmissions(db, teamId),
-      getWornBis(db, teamId),
-      getEffectiveDefaultBis(db),
-      getItemDb(db),
-    ]);
-
+    // Phase 1 — resolve the character's active spec (roster is tiny and always cached)
+    const roster      = await getRoster(db, teamId);
     const rosterEntry = roster.find(r =>
       charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase()
     );
-    const charSpecs = rosterEntry ? getCharSpecs(rosterEntry) : { primary: spec, secondary: [], pending: null, all: [spec] };
-
+    const charSpecs     = rosterEntry ? getCharSpecs(rosterEntry) : { primary: spec, secondary: [], pending: null, all: [spec] };
     const requestedSpec = c.req.query('spec') || charSpecs.primary;
     const activeSpec    = charSpecs.all.includes(requestedSpec) ? requestedSpec : charSpecs.primary;
+    const canonicalSpec = toCanonical(activeSpec);
+
+    // Phase 2 — narrow queries keyed to this character + spec; all run in parallel
+    const [lootLog, bisSubmissions, wornBisMap, effectiveBis, itemDb] = await Promise.all([
+      getLootLogForChar(db, teamId, charId, charName),
+      getBisSubmissions(db, teamId),
+      getWornBisForChar(db, charId),
+      getEffectiveDefaultBisForSpec(db, canonicalSpec),
+      getItemDb(db),
+    ]);
 
     const itemIdByName = new Map();
     for (const item of itemDb) {
@@ -50,9 +52,6 @@ router.get('/', requireAuth, async (c) => {
     }
 
     const loot = lootLog
-      .filter(e => charId && e.recipient_char_id
-        ? e.recipient_char_id === charId
-        : (e.recipient_name ?? '').toLowerCase() === charName.toLowerCase())
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .map(e => ({
         ...e,
@@ -77,9 +76,8 @@ router.get('/', requireAuth, async (c) => {
         rationale:     s.rationale     ?? '',
         officerNote:   s.officer_note  ?? '',
       }));
-    const canonicalSpec = toCanonical(activeSpec);
-    const specRows      = effectiveBis.filter(d => d.spec === canonicalSpec);
-    const specDefaults  = applyRaidBisInference(specRows, itemDb);
+
+    const specDefaults = applyRaidBisInference(effectiveBis, itemDb);
 
     const allChars      = c.get('session').user.chars ?? [];
     const charBisStatus = Object.fromEntries(allChars.map(ch => [ch.charName, {
@@ -96,7 +94,6 @@ router.get('/', requireAuth, async (c) => {
     // Build slot→tracks map for the current character + active spec from Worn BIS
     const wornBis = {};
     for (const [key, row] of wornBisMap) {
-      if (row.char_id !== charId) continue;
       if (row.spec.toLowerCase() !== activeSpec.toLowerCase()) continue;
       wornBis[row.slot] = {
         overallBISTrack: row.overall_bis_track ?? '',

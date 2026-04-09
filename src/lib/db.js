@@ -267,6 +267,25 @@ function parseLootRow(r) {
   return { ...r, ignored: r.ignored === 1 };
 }
 
+/**
+ * Narrow variant: returns loot log entries for a single character.
+ * Matches by charId (FK) with name fallback for pre-migration rows.
+ * Use this on the dashboard; keep getLootLog() for council/loot-history pages.
+ */
+export async function getLootLogForChar(db, teamId, charId, charName) {
+  const cacheKey = `loot_log_char:${charId || charName}`;
+  return cachedRead(cacheKey, TTL.BRIEF, async () => {
+    const rows = await all(db,
+      `SELECT * FROM loot_log
+       WHERE team_id = ?
+         AND (recipient_char_id = ? OR (recipient_char_id IS NULL AND LOWER(recipient_name) = LOWER(?)))
+       ORDER BY date DESC`,
+      teamId, charId || null, charName
+    );
+    return rows.map(parseLootRow);
+  });
+}
+
 export async function getLootLog(db, teamId) {
   return cachedRead(`loot_log:${teamId}`, TTL.BRIEF, async () => {
     const rows = await all(db,
@@ -492,6 +511,40 @@ export async function setSpecBisSource(db, spec, source) {
   cacheInvalidate('spec_bis_config');
 }
 
+/**
+ * Narrow variant: returns effective default BIS rows for a single canonical spec.
+ * Reads ~16 rows instead of the full 1,249-row table. Use this on the dashboard;
+ * keep getEffectiveDefaultBis() for pages that need all specs (council, admin).
+ */
+export async function getEffectiveDefaultBisForSpec(db, canonicalSpec) {
+  return cachedRead(`effective_default_bis:${canonicalSpec}`, TTL.LONG, async () => {
+    const [rows, specConfig] = await Promise.all([
+      all(db,
+        `SELECT d.*,
+                COALESCE(i1.item_id, '') AS true_bis_item_id,
+                COALESCE(i2.item_id, '') AS raid_bis_item_id
+         FROM default_bis d
+         LEFT JOIN item_db i1 ON i1.id = d.true_bis_item_id
+         LEFT JOIN item_db i2 ON i2.id = d.raid_bis_item_id
+         WHERE d.spec = ?`,
+        canonicalSpec),
+      getSpecBisConfig(db),
+    ]);
+    const preferredSource = specConfig.get(canonicalSpec);
+    const bySlot = new Map();
+    for (const row of rows) {
+      if (!bySlot.has(row.slot)) bySlot.set(row.slot, []);
+      bySlot.get(row.slot).push(row);
+    }
+    const result = [];
+    for (const candidates of bySlot.values()) {
+      const preferred = preferredSource && candidates.find(r => r.source === preferredSource);
+      result.push(preferred ?? candidates[0]);
+    }
+    return result;
+  });
+}
+
 export async function getEffectiveDefaultBis(db) {
   const [allRows, specConfig] = await Promise.all([
     getDefaultBis(db),
@@ -672,6 +725,23 @@ export async function upsertTierSnapshot(db, teamId, snapshots) {
 }
 
 // ── Worn BIS ──────────────────────────────────────────────────────────────────
+
+/**
+ * Narrow variant: returns worn BIS rows for a single character.
+ * Reads ~16 rows instead of the full team table. Use this on the dashboard;
+ * keep getWornBis() for pages that need all characters (council, wcl-sync).
+ */
+export async function getWornBisForChar(db, charId) {
+  return cachedRead(`worn_bis_char:${charId}`, TTL.SHORT, async () => {
+    const rows = await all(db,
+      'SELECT * FROM worn_bis WHERE char_id = ?',
+      charId
+    );
+    const map = new Map();
+    for (const r of rows) map.set(`${r.char_id}:${r.spec}:${r.slot}`, r);
+    return map;
+  });
+}
 
 export async function getWornBis(db, teamId) {
   return cachedRead(`worn_bis:${teamId}`, TTL.SHORT, async () => {
