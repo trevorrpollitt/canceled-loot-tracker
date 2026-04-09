@@ -165,6 +165,28 @@ export const CLASS_SPECS = {
 /** Flat list of all sheet spec names. */
 export const ALL_SPECS = Object.values(CLASS_SPECS).flat();
 
+// ── Role classification ───────────────────────────────────────────────────────
+
+const TANK_SPECS   = new Set(['Blood DK', 'Vengeance DH', 'Guardian Druid', 'Brewmaster Monk', 'Prot Paladin', 'Prot Warrior']);
+const HEALER_SPECS = new Set(['Resto Druid', 'Preservation Evoker', 'Mistweaver Monk', 'Holy Paladin', 'Disc Priest', 'Holy Priest', 'Resto Shaman']);
+const RANGED_SPECS = new Set([
+  'Balance Druid', 'Devastation Evoker', 'Augmentation Evoker',
+  'Devourer DH',
+  'BM Hunter', 'MM Hunter',
+  'Arcane Mage', 'Fire Mage', 'Frost Mage',
+  'Shadow Priest',
+  'Ele Shaman',
+  'Affliction Lock', 'Demo Lock', 'Destro Lock',
+]);
+
+/** Derive a character's role from their spec name. */
+export function specToRole(spec) {
+  if (TANK_SPECS.has(spec))   return 'Tank';
+  if (HEALER_SPECS.has(spec)) return 'Healer';
+  if (RANGED_SPECS.has(spec)) return 'Ranged DPS';
+  return 'Melee DPS';
+}
+
 // ── Track utilities ───────────────────────────────────────────────────────────
 
 export const TRACK_ORDER = { Crafted: -1, Veteran: 0, Champion: 1, Hero: 2, Mythic: 3 };

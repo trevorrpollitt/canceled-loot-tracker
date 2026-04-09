@@ -25,25 +25,7 @@ import {
   approvePrimarySpecChange, rejectPrimarySpecChange,
 } from '../../../lib/db.js';
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
-import { toCanonical, CLASS_SPECS, getCharSpecs } from '../../../lib/specs.js';
-
-const TANK_SPECS   = new Set(['Blood DK', 'Vengeance DH', 'Guardian Druid', 'Brewmaster Monk', 'Prot Paladin', 'Prot Warrior']);
-const HEALER_SPECS = new Set(['Resto Druid', 'Preservation Evoker', 'Mistweaver Monk', 'Holy Paladin', 'Disc Priest', 'Holy Priest', 'Resto Shaman']);
-const RANGED_SPECS = new Set([
-  'Balance Druid', 'Devastation Evoker', 'Augmentation Evoker',
-  'Devourer DH',
-  'BM Hunter', 'MM Hunter',
-  'Arcane Mage', 'Fire Mage', 'Frost Mage',
-  'Shadow Priest',
-  'Ele Shaman',
-  'Affliction Lock', 'Demo Lock', 'Destro Lock',
-]);
-function specToRole(spec) {
-  if (TANK_SPECS.has(spec))   return 'Tank';
-  if (HEALER_SPECS.has(spec)) return 'Healer';
-  if (RANGED_SPECS.has(spec)) return 'Ranged DPS';
-  return 'Melee DPS';
-}
+import { toCanonical, CLASS_SPECS, getCharSpecs, specToRole } from '../../../lib/specs.js';
 
 /** Normalise a raw D1 bis_submissions row to camelCase for the client. */
 function normalizeBisSub(s) {

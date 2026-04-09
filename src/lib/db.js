@@ -11,6 +11,8 @@
  *   await             db.prepare(sql).bind(...args).run();
  */
 
+import { specToRole } from './specs.js';
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 const all   = (db, sql, ...args) => db.prepare(sql).bind(...args).all().then(r => r.results);
@@ -144,6 +146,7 @@ export async function setRclcResponseMap(db, teamId, entries) {
 function parseRosterRow(r) {
   return {
     ...r,
+    role:                specToRole(r.spec),
     secondarySpecs:      r.secondary_specs ? r.secondary_specs.split('|').filter(Boolean) : [],
     pendingPrimarySpec:  r.pending_primary_spec ?? '',
   };
