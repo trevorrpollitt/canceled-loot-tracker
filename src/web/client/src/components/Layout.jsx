@@ -69,7 +69,7 @@ export default function Layout({ children }) {
           {user?.isOfficer && (
             <NavLink to="/admin/team-config" className="nav-tab">Team Config</NavLink>
           )}
-          {user?.isOfficer && (
+          {user?.isGlobalOfficer && (
             <NavLink to="/admin/global-config" className="nav-tab">Global Config</NavLink>
           )}
         </nav>

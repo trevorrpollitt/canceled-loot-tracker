@@ -85,6 +85,10 @@ export default function AdminGlobalConfig() {
   const [wclResult,         setWclResult]         = useState(null);
   const [wclSaving,         setWclSaving]         = useState(false);
 
+  // Migration
+  const [migrating,     setMigrating]     = useState(false);
+  const [migrateResult, setMigrateResult] = useState(null);
+
   // ── Load ────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -137,6 +141,33 @@ export default function AdminGlobalConfig() {
       ['wcl_crafted_bonus_ids', wclCraftedBonuses],
     ]));
     setWclSaving(false);
+  }
+
+  async function runMigration() {
+    if (!window.confirm(
+      'This will wipe ALL data in D1 (except sentinel rows) and re-import from Google Sheets.\n\n' +
+      'Run the migration?'
+    )) return;
+    setMigrating(true); setMigrateResult(null);
+    try {
+      const r = await fetch(apiPath('/api/admin/migrate-from-sheets'), {
+        method: 'POST', credentials: 'include',
+      });
+      const d = await r.json();
+      if (d.ok) {
+        const teamSummary = Object.entries(d.stats ?? {})
+          .filter(([k]) => k !== 'itemDb' && k !== 'defaultBis')
+          .map(([team, s]) => `${team}: ${s.roster} chars, ${s.loot} loot, ${s.raids} raids`)
+          .join(' | ');
+        setMigrateResult({ ok: true, msg: `Done. ${teamSummary}` });
+      } else {
+        setMigrateResult({ error: d.error ?? 'Migration failed' });
+      }
+    } catch {
+      setMigrateResult({ error: 'Request failed' });
+    } finally {
+      setMigrating(false);
+    }
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -217,6 +248,24 @@ export default function AdminGlobalConfig() {
         </button>
         <ResultMsg result={wclResult} />
       </div>
+
+      {/* ── Sheets → D1 Migration ────────────────────────────────────────── */}
+      {false && <div className="card" style={{ marginTop: 24 }}>
+        <div className="card-title">Sheets → D1 Migration</div>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+          Wipe all D1 data and re-import everything from Google Sheets. Use once when
+          setting up a fresh database. Requires <code>GOOGLE_SERVICE_ACCOUNT_KEY_JSON</code> to
+          be set as a Worker secret.
+        </p>
+        <button className="btn-danger" onClick={runMigration} disabled={migrating}>
+          {migrating ? 'Migrating…' : 'Run Migration'}
+        </button>
+        {migrateResult && (
+          <p style={{ marginTop: 12, fontSize: 13, color: migrateResult.ok ? 'var(--bis)' : 'var(--danger, #e05)' }}>
+            {migrateResult.ok ? migrateResult.msg : `Error: ${migrateResult.error}`}
+          </p>
+        )}
+      </div>}
     </div>
   );
 }

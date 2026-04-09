@@ -23,6 +23,31 @@ import {
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand, getCharSpecs } from '../../../lib/specs.js';
 import { runWclSyncForTeam, runWclSyncWornBisOnly } from '../../../lib/wcl-sync.js';
+import {
+  getTeamRegistry      as sheetsGetTeamRegistry,
+  getGlobalConfig      as sheetsGetGlobalConfig,
+  getItemDb            as sheetsGetItemDb,
+  getDefaultBis        as sheetsGetDefaultBis,
+  getDefaultBisOverrides as sheetsGetDefaultBisOverrides,
+  getSpecBisConfig     as sheetsGetSpecBisConfig,
+  getTierItems         as sheetsGetTierItems,
+  getRoster            as sheetsGetRoster,
+  getLootLog           as sheetsGetLootLog,
+  getBisSubmissions    as sheetsGetBisSubmissions,
+  getRaids             as sheetsGetRaids,
+  getRaidEncounters    as sheetsGetRaidEncounters,
+  getTierSnapshot      as sheetsGetTierSnapshot,
+  getWornBis           as sheetsGetWornBis,
+  getRclcResponseMap   as sheetsGetRclcResponseMap,
+  getConfig            as sheetsGetConfig,
+} from '../../../lib/sheets.js';
+
+/** Execute D1 prepared statements in chunks to stay under the 100-statement batch limit. */
+async function batchInsert(db, stmts, chunkSize = 80) {
+  for (let i = 0; i < stmts.length; i += chunkSize) {
+    await db.batch(stmts.slice(i, i + chunkSize));
+  }
+}
 
 const TIER_SLOTS     = new Set(['Head', 'Shoulders', 'Chest', 'Hands', 'Legs']);
 const CATALYST_SLOTS = new Set(['Neck', 'Back', 'Wrists', 'Waist', 'Feet']);
@@ -451,7 +476,7 @@ router.post('/rclc-map', requireOfficer, async (c) => {
 
 // ── Global Config ─────────────────────────────────────────────────────────────
 
-router.get('/global-config', requireOfficer, async (c) => {
+router.get('/global-config', requireGlobalOfficer, async (c) => {
   const db = c.env.DB;
   try {
     const config = await getGlobalConfig(db);
@@ -461,7 +486,7 @@ router.get('/global-config', requireOfficer, async (c) => {
   }
 });
 
-router.post('/global-config', requireOfficer, async (c) => {
+router.post('/global-config', requireGlobalOfficer, async (c) => {
   const db = c.env.DB;
   const { key, value } = await c.req.json();
   if (!key) return c.json({ error: 'key is required' }, 400);
@@ -470,6 +495,301 @@ router.post('/global-config', requireOfficer, async (c) => {
     return c.json({ ok: true });
   } catch (err) {
     return c.json({ error: err.message ?? 'Failed to save global config' }, 500);
+  }
+});
+
+// ── POST /api/admin/migrate-from-sheets ───────────────────────────────────────
+
+router.post('/migrate-from-sheets', requireGlobalOfficer, async (c) => {
+  const db    = c.env.DB;
+  const stats = {};
+
+  try {
+    // 1. Read all guild-wide Sheets data in parallel
+    const [teams, globalCfg, itemDbRaw, defaultBisRaw, bisOverrides, specBisCfg, tierItems] =
+      await Promise.all([
+        sheetsGetTeamRegistry(),
+        sheetsGetGlobalConfig(),
+        sheetsGetItemDb(),
+        sheetsGetDefaultBis(),
+        sheetsGetDefaultBisOverrides(),
+        sheetsGetSpecBisConfig(),
+        sheetsGetTierItems(),
+      ]);
+
+    // Deduplicate item DB (mirrors script behaviour)
+    const itemDb = [];
+    { const seen = new Set();
+      for (const item of itemDbRaw) {
+        if (!seen.has(item.itemId)) { seen.add(item.itemId); itemDb.push(item); }
+      }
+    }
+
+    // Deduplicate default BIS (spec|slot|source)
+    const defaultBis = [];
+    { const seen = new Set();
+      for (const row of defaultBisRaw) {
+        const key = `${row.spec}|${row.slot}|${row.source}`;
+        if (!seen.has(key)) { seen.add(key); defaultBis.push(row); }
+      }
+    }
+
+    // 2. Clear all tables in FK-safe order, preserving sentinel rows (id=0)
+    const CLEAR_ORDER = [
+      'worn_bis', 'tier_snapshot', 'raid_encounters', 'raid_attendees', 'raids',
+      'bis_submissions', 'loot_log', 'rclc_response_map', 'roster', 'team_config',
+      'transfers', 'tier_items', 'spec_bis_config', 'default_bis_overrides', 'default_bis',
+      'item_db', 'global_config', 'teams',
+    ];
+    await db.batch(CLEAR_ORDER.map(tbl =>
+      db.prepare(
+        (tbl === 'teams' || tbl === 'roster')
+          ? `DELETE FROM ${tbl} WHERE id > 0`
+          : `DELETE FROM ${tbl}`
+      )
+    ));
+
+    // 3. Insert guild-wide data
+
+    if (teams.length > 0) {
+      await batchInsert(db, teams.map(t =>
+        db.prepare('INSERT INTO teams (name) VALUES (?)').bind(t.name)
+      ));
+    }
+
+    // Resolve team IDs for subsequent FK binds
+    const teamRows     = await db.prepare('SELECT id, name FROM teams WHERE id > 0').all();
+    const teamIdByName = new Map(teamRows.results.map(r => [r.name, r.id]));
+
+    const gcEntries = Object.entries(globalCfg);
+    if (gcEntries.length > 0) {
+      await batchInsert(db, gcEntries.map(([k, v]) =>
+        db.prepare('INSERT INTO global_config (key, value) VALUES (?, ?)').bind(k, String(v ?? ''))
+      ));
+    }
+
+    if (itemDb.length > 0) {
+      const boolVal = v => (v === true || String(v).toUpperCase() === 'TRUE') ? 1 : 0;
+      await batchInsert(db, itemDb.map(item =>
+        db.prepare(
+          'INSERT INTO item_db (item_id, name, slot, source_type, source_name, instance, difficulty, armor_type, is_tier_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(
+          String(item.itemId), item.name, item.slot, item.sourceType,
+          item.sourceName ?? '', item.instance ?? '', item.difficulty ?? '',
+          item.armorType, boolVal(item.isTierToken),
+        )
+      ));
+    }
+    stats.itemDb = itemDb.length;
+
+    // Resolve item PKs for default_bis FK columns
+    const itemRows  = await db.prepare('SELECT id, item_id FROM item_db').all();
+    const itemIdMap = new Map(itemRows.results.map(r => [String(r.item_id), r.id]));
+    const resolveItemId = id => (id ? (itemIdMap.get(String(id)) ?? null) : null);
+
+    if (defaultBis.length > 0) {
+      await batchInsert(db, defaultBis.map(row =>
+        db.prepare(
+          'INSERT INTO default_bis (spec, slot, true_bis, true_bis_item_id, raid_bis, raid_bis_item_id, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).bind(
+          row.spec, row.slot,
+          row.trueBis ?? '', resolveItemId(row.trueBisItemId),
+          row.raidBis ?? '', resolveItemId(row.raidBisItemId),
+          row.source ?? '',
+        )
+      ));
+    }
+    stats.defaultBis = defaultBis.length;
+
+    if (bisOverrides.length > 0) {
+      await batchInsert(db, bisOverrides.map(row =>
+        db.prepare(
+          'INSERT OR REPLACE INTO default_bis_overrides (spec, slot, source, true_bis, true_bis_item_id, raid_bis, raid_bis_item_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).bind(
+          row.spec, row.slot, row.source ?? '',
+          row.trueBis ?? '', row.trueBisItemId ?? null,
+          row.raidBis ?? '', row.raidBisItemId ?? null,
+        )
+      ));
+    }
+
+    const specBisEntries = [...specBisCfg];
+    if (specBisEntries.length > 0) {
+      await batchInsert(db, specBisEntries.map(([spec, source]) =>
+        db.prepare('INSERT INTO spec_bis_config (spec, source) VALUES (?, ?)').bind(spec, source)
+      ));
+    }
+
+    if (tierItems.length > 0) {
+      await batchInsert(db, tierItems.map(item =>
+        db.prepare('INSERT OR REPLACE INTO tier_items (class, slot, item_id) VALUES (?, ?, ?)').bind(item.class, item.slot, String(item.itemId))
+      ));
+    }
+
+    // 4. Per-team data
+    for (const team of teams) {
+      const teamId = teamIdByName.get(team.name);
+      if (!teamId) continue;
+
+      const [config, roster, lootLog, bisSubs, raids, raidEncounters,
+             tierSnapshotRaw, wornBisMap, rclcMap] = await Promise.all([
+        sheetsGetConfig(team.sheetId),
+        sheetsGetRoster(team.sheetId),
+        sheetsGetLootLog(team.sheetId),
+        sheetsGetBisSubmissions(team.sheetId),
+        sheetsGetRaids(team.sheetId),
+        sheetsGetRaidEncounters(team.sheetId),
+        sheetsGetTierSnapshot(team.sheetId),
+        sheetsGetWornBis(team.sheetId),
+        sheetsGetRclcResponseMap(team.sheetId),
+      ]);
+
+      const rosterCharIds = new Set(roster.map(r => r.charId).filter(Boolean));
+      const tierSnapshot  = tierSnapshotRaw.filter(s => rosterCharIds.has(s.charId));
+
+      // Team config
+      const cfgEntries = Object.entries(config);
+      if (cfgEntries.length > 0) {
+        await batchInsert(db, cfgEntries.map(([k, v]) =>
+          db.prepare('INSERT INTO team_config (team_id, key, value) VALUES (?, ?, ?)').bind(teamId, k, String(v ?? ''))
+        ));
+      }
+
+      // Roster — must be inserted before anything that references roster(id)
+      if (roster.length > 0) {
+        await batchInsert(db, roster.map(char =>
+          db.prepare(
+            'INSERT INTO roster (team_id, char_name, class, spec, role, status, owner_id, owner_nick, server, legacy_char_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind(
+            teamId, char.charName, char.class, char.spec, char.role ?? '',
+            char.status ?? 'Active', char.ownerId ?? '', char.ownerNick ?? '',
+            char.server ?? '', char.charId ?? null,
+          )
+        ));
+      }
+
+      // Resolve roster PKs
+      const rosterRows      = await db.prepare('SELECT id, legacy_char_id, char_name FROM roster WHERE team_id = ?').bind(teamId).all();
+      const charIdByLegacy  = new Map(rosterRows.results.filter(r => r.legacy_char_id).map(r => [r.legacy_char_id, r.id]));
+      const charIdByName    = new Map(rosterRows.results.map(r => [r.char_name, r.id]));
+      const resolveCharId   = (charId, charName) =>
+        (charId && charIdByLegacy.get(charId)) || charIdByName.get(charName) || null;
+
+      // Raids
+      if (raids.length > 0) {
+        await batchInsert(db, raids.map(raid =>
+          db.prepare('INSERT INTO raids (raid_id, team_id, date, instance, difficulty) VALUES (?, ?, ?, ?, ?)')
+            .bind(raid.raidId, teamId, raid.date, raid.instance, raid.difficulty)
+        ));
+      }
+
+      // Resolve raid PKs
+      const raidRows    = await db.prepare('SELECT id, raid_id FROM raids WHERE team_id = ?').bind(teamId).all();
+      const raidIdByCode = new Map(raidRows.results.map(r => [r.raid_id, r.id]));
+
+      // Raid attendees
+      const attendeeStmts = [];
+      for (const raid of raids) {
+        const raidDbId = raidIdByCode.get(raid.raidId);
+        if (!raidDbId) continue;
+        for (const userId of (raid.attendeeIds ?? [])) {
+          attendeeStmts.push(
+            db.prepare('INSERT OR IGNORE INTO raid_attendees (raid_id, user_id) VALUES (?, ?)').bind(raidDbId, userId)
+          );
+        }
+      }
+      if (attendeeStmts.length > 0) await batchInsert(db, attendeeStmts);
+
+      // Raid encounters
+      const boolVal = v => (v === true || String(v).toUpperCase() === 'TRUE') ? 1 : 0;
+      const encStmts = raidEncounters.flatMap(enc => {
+        const raidDbId = raidIdByCode.get(enc.raidId);
+        if (!raidDbId) return [];
+        return [db.prepare(
+          'INSERT OR IGNORE INTO raid_encounters (raid_id, encounter_id, boss_name, pulls, killed, best_pct) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(raidDbId, enc.encounterId, enc.bossName, enc.pulls ?? 0, boolVal(enc.killed), enc.bestPct ?? 0)];
+      });
+      if (encStmts.length > 0) await batchInsert(db, encStmts);
+
+      // Loot log
+      if (lootLog.length > 0) {
+        await batchInsert(db, lootLog.map(entry =>
+          db.prepare(
+            'INSERT INTO loot_log (team_id, date, boss, item_name, difficulty, recipient_id, recipient_name, recipient_char_id, upgrade_type, notes, ignored) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind(
+            teamId, entry.date, entry.boss, entry.itemName, entry.difficulty ?? '',
+            entry.recipientId ?? '', entry.recipientChar ?? '',
+            resolveCharId(entry.recipientCharId, entry.recipientChar),
+            entry.upgradeType ?? '', entry.notes ?? '',
+            boolVal(entry.ignored),
+          )
+        ));
+      }
+
+      // BIS submissions
+      if (bisSubs.length > 0) {
+        await batchInsert(db, bisSubs.map(sub =>
+          db.prepare(
+            'INSERT OR IGNORE INTO bis_submissions (team_id, char_id, char_name, spec, slot, true_bis, raid_bis, rationale, status, submitted_at, reviewed_by, officer_note, true_bis_item_id, raid_bis_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind(
+            teamId, resolveCharId(sub.charId, sub.charName), sub.charName,
+            sub.spec, sub.slot,
+            sub.trueBis ?? '', sub.raidBis ?? '', sub.rationale ?? '',
+            sub.status ?? 'Pending', sub.submittedAt ?? '', sub.reviewedBy ?? '', sub.officerNote ?? '',
+            sub.trueBisItemId ?? null, sub.raidBisItemId ?? null,
+          )
+        ));
+      }
+
+      // RCLC response map
+      const rclcStmts = [];
+      for (const [button, { internalType, counted }] of rclcMap) {
+        rclcStmts.push(
+          db.prepare('INSERT INTO rclc_response_map (team_id, rclc_button, internal_type, counted_in_totals) VALUES (?, ?, ?, ?)')
+            .bind(teamId, button, internalType, counted ? 1 : 0)
+        );
+      }
+      if (rclcStmts.length > 0) await batchInsert(db, rclcStmts);
+
+      // Tier snapshot
+      const tsStmts = tierSnapshot.flatMap(snap => {
+        const charDbId = resolveCharId(snap.charId, snap.charName);
+        if (!charDbId) return [];
+        const raidDbId = snap.raidId ? (raidIdByCode.get(snap.raidId) ?? null) : null;
+        return [db.prepare(
+          'INSERT OR REPLACE INTO tier_snapshot (char_id, raid_id, tier_count, tier_detail, updated_at) VALUES (?, ?, ?, ?, ?)'
+        ).bind(charDbId, raidDbId, snap.tierCount ?? 0, snap.tierDetail ?? '', snap.updatedAt ?? '')];
+      });
+      if (tsStmts.length > 0) await batchInsert(db, tsStmts);
+
+      // Worn BIS
+      const wornBisStmts = [];
+      for (const entry of wornBisMap.values()) {
+        if (!rosterCharIds.has(entry.charId)) continue;
+        const charDbId = resolveCharId(entry.charId, entry.charName);
+        if (!charDbId) continue;
+        wornBisStmts.push(
+          db.prepare(
+            'INSERT OR REPLACE INTO worn_bis (char_id, slot, spec, overall_bis_track, raid_bis_track, other_track, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(
+            charDbId, entry.slot, entry.spec ?? '',
+            entry.overallBISTrack ?? '', entry.raidBISTrack ?? '', entry.otherTrack ?? '',
+            entry.updatedAt ?? '',
+          )
+        );
+      }
+      if (wornBisStmts.length > 0) await batchInsert(db, wornBisStmts);
+
+      stats[team.name] = {
+        roster: roster.length, loot: lootLog.length,
+        bis: bisSubs.length, raids: raids.length,
+      };
+    }
+
+    return c.json({ ok: true, stats });
+  } catch (err) {
+    console.error('[admin] migrate-from-sheets error:', err);
+    return c.json({ error: err.message ?? 'Migration failed' }, 500);
   }
 });
 

@@ -92,9 +92,9 @@ export default function App() {
         </OfficerRoute>
       } />
       <Route path="/admin/global-config" element={
-        <OfficerRoute>
+        <GlobalOfficerRoute>
           <Layout><AdminGlobalConfig /></Layout>
-        </OfficerRoute>
+        </GlobalOfficerRoute>
       } />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
