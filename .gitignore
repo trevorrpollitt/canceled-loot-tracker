@@ -5,3 +5,6 @@ config/service-account.json
 src/web/client/dist/
 migration-output.sql
 *.local.sql
+.claude/
+.wrangler/
+memory/
