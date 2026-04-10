@@ -19,14 +19,7 @@ binding       = "DB"
 database_name = "canceled-loot-tracker"
 database_id   = "local"
 
-[env.production]
-[[env.production.d1_databases]]
-binding       = "DB"
-database_name = "canceled-loot-tracker"
-database_id   = "1c703d33-7491-4d5e-981f-a269e9578434"
-
 [triggers]
-# WCL sync — poll for new/updated raid reports every 10 minutes
 crons = ["*/10 * * * *"]
 
 [build]
@@ -39,15 +32,51 @@ enabled = true
 invocation_logs = true
 
 [vars]
-# Discord
 DISCORD_CLIENT_ID    = "1481498623416991796"
 DISCORD_GUILD_ID     = "1282068816116977695"
 DISCORD_REDIRECT_URI = "https://canceledwow.com/loot/api/auth/callback"
-
-# Web app
 APP_BASE_PATH = "/loot"
-LOG_LEVEL     = "off"   # off | verbose | debug
-
-# Blizzard API
+LOG_LEVEL     = "off"
 BLIZZARD_CLIENT_ID = "cec2990ff08043058a1c11a3c417d4bc"
 BLIZZARD_REGION    = "us"
+
+
+# ── Production ───────────────────────────────────────────────
+[env.production]
+name = "canceled-loot-tracker"
+main = "src/web/server/index.js"
+compatibility_date = "2026-03-15"
+compatibility_flags = [ "nodejs_compat" ]
+
+[[env.production.routes]]
+pattern = "canceledwow.com/loot*"
+zone_name = "canceledwow.com"
+[[env.production.routes]]
+pattern = "www.canceledwow.com/loot*"
+zone_name = "canceledwow.com"
+
+[env.production.assets]
+directory = "./src/web/client/dist/loot"
+binding = "ASSETS"
+
+[env.production.triggers]
+crons = ["*/10 * * * *"]
+
+[env.production.observability]
+[env.production.observability.logs]
+enabled = true
+invocation_logs = true
+
+[env.production.vars]
+DISCORD_CLIENT_ID    = "1481498623416991796"
+DISCORD_GUILD_ID     = "1282068816116977695"
+DISCORD_REDIRECT_URI = "https://canceledwow.com/loot/api/auth/callback"
+APP_BASE_PATH = "/loot"
+LOG_LEVEL     = "off"
+BLIZZARD_CLIENT_ID = "cec2990ff08043058a1c11a3c417d4bc"
+BLIZZARD_REGION    = "us"
+
+[[env.production.d1_databases]]
+binding       = "DB"
+database_name = "canceled-loot-tracker"
+database_id   = "1c703d33-7491-4d5e-981f-a269e9578434"
