@@ -21,6 +21,7 @@ export default function ItemLink({ name, itemId, className }) {
   return (
     <a
       href={`https://www.wowhead.com/item=${id}`}
+      data-wowhead={`item=${id}`}
       className={`wh-link${className ? ` ${className}` : ''}`}
     >
       {name}

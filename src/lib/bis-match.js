@@ -44,14 +44,16 @@ export function matchesBis(bisValue, bisItemId, item, charArmorType, slot) {
  * Returns null if raidBis is already set (leave it alone).
  * Returns { raidBis, raidBisItemId, auto } otherwise.
  *
- * @param {object} row              — default_bis / effective_default_bis row
- * @param {Map}    itemDbByName     — item_db rows keyed by name.toLowerCase()
+ * @param {object}   row              — default_bis / effective_default_bis row
+ * @param {Map|null} itemDbByName     — item_db rows keyed by name.toLowerCase() (optional)
  */
-export function inferRaidBis(row, itemDbByName) {
+export function inferRaidBis(row, itemDbByName = null) {
   // Accept both snake_case (D1) and camelCase (legacy) field names
-  const raidBis       = row.raid_bis        ?? row.raidBis       ?? '';
-  const trueBis       = row.true_bis        ?? row.trueBis       ?? '';
-  const trueBisItemId = row.true_bis_item_id ?? row.trueBisItemId ?? '';
+  const raidBis        = row.raid_bis           ?? row.raidBis          ?? '';
+  const trueBis        = row.true_bis           ?? row.trueBis          ?? '';
+  const trueBisItemId  = row.true_bis_item_id   ?? row.trueBisItemId    ?? '';
+  // Pre-joined source type from getEffectiveDefaultBisForSpec — avoids item_db lookup
+  const trueBisSourceType = row.true_bis_source_type ?? row.trueBisSourceType ?? null;
 
   if (raidBis) return null;
 
@@ -63,10 +65,17 @@ export function inferRaidBis(row, itemDbByName) {
     return { raidBis: '', raidBisItemId: '', auto: false };
   }
 
-  const dbItem = itemDbByName.get(trueBis.toLowerCase());
-  const sourceType = dbItem?.source_type ?? dbItem?.sourceType;
+  // Use pre-joined source type if available; fall back to itemDbByName lookup
+  let sourceType = trueBisSourceType;
+  let fallbackItemId = '';
+  if (sourceType === null && itemDbByName) {
+    const dbItem = itemDbByName.get(trueBis.toLowerCase());
+    sourceType = dbItem?.source_type ?? dbItem?.sourceType ?? null;
+    fallbackItemId = String(dbItem?.item_id ?? dbItem?.itemId ?? '');
+  }
+
   if (sourceType === 'Raid') {
-    const id = String(trueBisItemId || dbItem.item_id || dbItem.itemId || '');
+    const id = String(trueBisItemId || fallbackItemId || '');
     return { raidBis: trueBis, raidBisItemId: id, auto: true };
   }
 
@@ -77,21 +86,23 @@ export function inferRaidBis(row, itemDbByName) {
  * Apply inferRaidBis to every row in an effective-default-BIS result set.
  * Returns rows normalised to camelCase regardless of input field naming.
  *
- * @param {object[]} rows   — from getEffectiveDefaultBis
- * @param {object[]} itemDb — from getItemDb
+ * @param {object[]}      rows    — from getEffectiveDefaultBis / getEffectiveDefaultBisForSpec
+ * @param {object[]|null} itemDb  — from getItemDb (optional when rows have true_bis_source_type)
  * @returns {object[]}
  */
-export function applyRaidBisInference(rows, itemDb) {
-  const byName = new Map(itemDb.map(i => [i.name.toLowerCase(), i]));
+export function applyRaidBisInference(rows, itemDb = null) {
+  const byName = itemDb ? new Map(itemDb.map(i => [i.name.toLowerCase(), i])) : null;
   return rows.map(row => {
     // Normalise internally — supports both D1 snake_case and legacy camelCase input
     const base = {
-      spec:          row.spec,
-      slot:          row.slot,
-      trueBis:       row.true_bis         ?? row.trueBis        ?? '',
-      trueBisItemId: row.true_bis_item_id  ?? row.trueBisItemId  ?? '',
-      raidBis:       row.raid_bis         ?? row.raidBis        ?? '',
-      raidBisItemId: row.raid_bis_item_id  ?? row.raidBisItemId  ?? '',
+      spec:               row.spec,
+      slot:               row.slot,
+      trueBis:            row.true_bis              ?? row.trueBis           ?? '',
+      trueBisItemId:      row.true_bis_item_id       ?? row.trueBisItemId     ?? '',
+      raidBis:            row.raid_bis              ?? row.raidBis           ?? '',
+      raidBisItemId:      row.raid_bis_item_id       ?? row.raidBisItemId     ?? '',
+      // Pre-joined source type — present when rows come from getEffectiveDefaultBisForSpec
+      true_bis_source_type: row.true_bis_source_type ?? row.trueBisSourceType ?? null,
     };
 
     const inferred = inferRaidBis(base, byName);

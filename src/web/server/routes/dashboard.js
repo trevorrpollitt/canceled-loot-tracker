@@ -7,8 +7,8 @@
 import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
-  getLootLogForChar, getBisSubmissions, getEffectiveDefaultBisForSpec, getItemDb,
-  getWornBisForChar, getRoster, getGlobalConfig, getTierItems,
+  getLootLogForChar, getBisSubmissionsForChar, getEffectiveDefaultBisForSpec,
+  getWornBisForChar, getRosterMember, getGlobalConfig, getTierItems,
   upsertWornBis, upsertTierSnapshot,
 } from '../../../lib/db.js';
 import { toCanonical, getCharSpecs, getArmorType, buildTrackRanges, getItemTrack, mergeTrack } from '../../../lib/specs.js';
@@ -27,35 +27,27 @@ router.get('/', requireAuth, async (c) => {
   const db = c.env.DB;
 
   try {
-    // Phase 1 — resolve the character's active spec (roster is tiny and always cached)
-    const roster      = await getRoster(db, teamId);
-    const rosterEntry = roster.find(r =>
-      charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase()
-    );
+    // Phase 1 — resolve the character's roster entry and active spec
+    const rosterEntry   = charId ? await getRosterMember(db, charId) : null;
     const charSpecs     = rosterEntry ? getCharSpecs(rosterEntry) : { primary: spec, secondary: [], pending: null, all: [spec] };
     const requestedSpec = c.req.query('spec') || charSpecs.primary;
     const activeSpec    = charSpecs.all.includes(requestedSpec) ? requestedSpec : charSpecs.primary;
     const canonicalSpec = toCanonical(activeSpec);
 
-    // Phase 2 — narrow queries keyed to this character + spec; all run in parallel
-    const [lootLog, bisSubmissions, wornBisMap, effectiveBis, itemDb] = await Promise.all([
+    // Phase 2 — all narrow queries in parallel; each scoped to this char/spec
+    const [lootLog, bisSubmissions, wornBisMap, effectiveBis] = await Promise.all([
       getLootLogForChar(db, teamId, charId, charName),
-      getBisSubmissions(db, teamId),
+      getBisSubmissionsForChar(db, teamId, charId, charName),
       getWornBisForChar(db, charId),
       getEffectiveDefaultBisForSpec(db, canonicalSpec),
-      getItemDb(db),
     ]);
-
-    const itemIdByName = new Map();
-    for (const item of itemDb) {
-      if (item.name) itemIdByName.set(item.name.toLowerCase(), item.item_id);
-    }
 
     const loot = lootLog
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .map(e => ({
         ...e,
-        itemId: itemIdByName.get((e.item_name ?? '').toLowerCase()) ?? '',
+        // item_blizzard_id is pre-joined in getLootLogForChar
+        itemId: e.item_blizzard_id ?? '',
       }));
 
     const charApprovedBis = bisSubmissions.filter(s =>
@@ -77,18 +69,16 @@ router.get('/', requireAuth, async (c) => {
         officerNote:   s.officer_note  ?? '',
       }));
 
-    const specDefaults = applyRaidBisInference(effectiveBis, itemDb);
+    // true_bis_source_type is pre-joined in getEffectiveDefaultBisForSpec — no itemDb needed
+    const specDefaults = applyRaidBisInference(effectiveBis);
 
     const allChars      = c.get('session').user.chars ?? [];
-    const charBisStatus = Object.fromEntries(allChars.map(ch => [ch.charName, {
-      pending:  bisSubmissions.filter(s =>
-        s.status === 'Pending' &&
-        (ch.charId && s.char_id ? s.char_id === ch.charId : s.char_name.toLowerCase() === ch.charName.toLowerCase())
-      ).length,
-      rejected: bisSubmissions.filter(s =>
-        s.status === 'Rejected' &&
-        (ch.charId && s.char_id ? s.char_id === ch.charId : s.char_name.toLowerCase() === ch.charName.toLowerCase())
-      ).length,
+    const allCharSubs   = await Promise.all(
+      allChars.map(ch => getBisSubmissionsForChar(db, teamId, ch.charId, ch.charName))
+    );
+    const charBisStatus = Object.fromEntries(allChars.map((ch, i) => [ch.charName, {
+      pending:  allCharSubs[i].filter(s => s.status === 'Pending').length,
+      rejected: allCharSubs[i].filter(s => s.status === 'Rejected').length,
     }]));
 
     // Build slot→tracks map for the current character + active spec from Worn BIS

@@ -15,9 +15,15 @@ directory = "./src/web/client/dist/loot"
 binding = "ASSETS"
 
 [[d1_databases]]
-binding  = "DB"
+binding       = "DB"
 database_name = "canceled-loot-tracker"
-database_id   = "1c703d33-7491-4d5e-981f-a269e9578434"  #  Local
+database_id   = "local"
+
+[env.production]
+[[env.production.d1_databases]]
+binding       = "DB"
+database_name = "canceled-loot-tracker"
+database_id   = "1c703d33-7491-4d5e-981f-a269e9578434"
 
 [triggers]
 # WCL sync — poll for new/updated raid reports every 10 minutes

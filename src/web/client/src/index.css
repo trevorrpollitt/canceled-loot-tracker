@@ -1069,7 +1069,7 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
   cursor: pointer;
   transition: background 0.15s;
 }
-.btn-primary:hover    { background: var(--primary-h); }
+.btn-primary:hover    { background: var(--primary-h); color: #fff; }
 .btn-primary:disabled { opacity: 0.45; cursor: default; }
 
 /* ── BIS form ───────────────────────────────────────────────────────────────── */

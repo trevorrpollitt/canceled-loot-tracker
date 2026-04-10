@@ -17,8 +17,9 @@ import {
   updateDefaultBisOverrides, getBisSubmissions,
   approveBisSubmission, rejectBisSubmission, getTeamConfig, setTeamConfigValue, clearWornBis,
   invalidateWornBisSlots, getRoster, approvePrimarySpecChange, rejectPrimarySpecChange,
-  getEffectiveDefaultBis, getAllTeams, getGlobalConfig, setGlobalConfigValue,
-  getRclcResponseMapRows, setRclcResponseMap,
+  getEffectiveDefaultBis, getEffectiveDefaultBisForSpec, getAllTeams, getGlobalConfig, setGlobalConfigValue,
+  getRclcResponseMapRows, setRclcResponseMap, getRosterPendingSpecChanges,
+  getBisSubmissionsPending, getBisSubmissionsForChar,
 } from '../../../lib/db.js';
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand, getCharSpecs } from '../../../lib/specs.js';
@@ -242,63 +243,93 @@ router.get('/bis-review', requireOfficer, async (c) => {
   if (!teamId) return c.json({ error: 'No team configured' }, 400);
   const db = c.env.DB;
   try {
-    const [allSubmissions, itemDb, effectiveDefaults, roster] = await Promise.all([
-      getBisSubmissions(db, teamId), getItemDb(db), getEffectiveDefaultBis(db), getRoster(db, teamId),
+    // Phase 1 — load only Pending submissions (small) + roster spec-change requests in parallel.
+    // Source info for each item is pre-joined — no separate item_db load needed.
+    const [pending, rosterPendingSpec] = await Promise.all([
+      getBisSubmissionsPending(db, teamId),
+      getRosterPendingSpecChanges(db, teamId),
     ]);
 
-    const itemByName = new Map(itemDb.map(i => [i.name.toLowerCase(), i]));
-    const resolveSource = (name) => {
-      if (!name) return null;
-      const item = itemByName.get(name.toLowerCase());
-      if (!item) return null;
-      return { itemId: String(item.item_id ?? ''), difficulty: item.difficulty ?? '', sourceType: item.source_type ?? '', sourceName: item.source_name ?? '' };
+    // Derive unique chars and specs from pending subs — used for targeted Phase 2 queries.
+    // Deduplicate by charId (or charName fallback), always carrying both so the name-based
+    // fallback in getBisSubmissionsForChar can find pre-migration rows with char_id = NULL.
+    const pendingSpecs = [...new Set(pending.map(s => toCanonical(s.spec)).filter(Boolean))];
+    const pendingChars = [...new Map(
+      pending.map(s => [s.char_id || s.char_name, { charId: s.char_id, charName: s.char_name }])
+    ).values()];
+
+    // Phase 2 — narrow spec defaults + Approved submissions only for chars with pending reviews
+    const [specDefaultRows, approvedSubArrays] = await Promise.all([
+      Promise.all(pendingSpecs.map(spec => getEffectiveDefaultBisForSpec(db, spec))),
+      Promise.all(pendingChars.map(ch => getBisSubmissionsForChar(db, teamId, ch.charId, ch.charName))),
+    ]);
+
+    // Flatten approved submissions into a lookup map
+    const allApproved = approvedSubArrays.flat().filter(s => s.status === 'Approved');
+
+    // resolveSource reads pre-joined fields from a submission row — no item_db lookup needed
+    const resolveSource = (row, prefix) => {
+      const id   = row[`${prefix}_blizzard_id`];
+      const diff = row[`${prefix}_difficulty`];
+      const st   = row[`${prefix}_source_type`];
+      const sn   = row[`${prefix}_source_name`];
+      if (!id && !diff && !st) return null;
+      return { itemId: String(id ?? ''), difficulty: diff ?? '', sourceType: st ?? '', sourceName: sn ?? '' };
     };
 
     const specDefaultByKey = new Map();
-    for (const row of applyRaidBisInference(effectiveDefaults, itemDb)) {
-      if (!row.true_bis) continue;
-      const canonSpec = toCanonical(row.spec);
-      specDefaultByKey.set(canonSpec + '::' + row.slot, { trueBis: row.true_bis ?? '', raidBis: row.raid_bis ?? '', source: row.source ?? '' });
+    for (const rows of specDefaultRows) {
+      for (const row of applyRaidBisInference(rows)) {
+        if (!row.true_bis) continue;
+        specDefaultByKey.set(toCanonical(row.spec) + '::' + row.slot, {
+          trueBis: row.true_bis ?? '',
+          raidBis: row.raid_bis ?? '',
+          source:  row.source   ?? '',
+          // Pre-joined source info for the true_bis item — used by SourceBadge in review UI
+          trueBisSource: (row.true_bis_blizzard_id || row.true_bis_source_type)
+            ? { itemId: String(row.true_bis_blizzard_id ?? ''), difficulty: row.true_bis_difficulty ?? '', sourceType: row.true_bis_source_type ?? '', sourceName: row.true_bis_source_name ?? '' }
+            : null,
+          raidBisSource: null, // raid_bis on spec defaults is inferred — no item_db join for it
+        });
+      }
     }
 
     const approvedByKey = new Map();
-    for (const s of allSubmissions) {
-      if (s.status !== 'Approved') continue;
-      approvedByKey.set(s.char_name + '::' + (s.spec ?? '') + '::' + s.slot, { trueBis: s.true_bis ?? '', raidBis: s.raid_bis ?? '' });
+    for (const s of allApproved) {
+      approvedByKey.set(s.char_name + '::' + (s.spec ?? '') + '::' + s.slot, {
+        trueBis:       s.true_bis        ?? '',
+        raidBis:       s.raid_bis        ?? '',
+        trueBisSource: resolveSource(s, 'true_bis'),
+        raidBisSource: resolveSource(s, 'raid_bis'),
+      });
     }
 
     const resolveCurrent = (charName, spec, slot) => {
       const approved = approvedByKey.get(charName + '::' + (spec ?? '') + '::' + slot);
       if (approved) return { ...approved, isDefault: false, defaultSource: null };
       const def = specDefaultByKey.get(toCanonical(spec) + '::' + slot);
-      if (def)      return { ...def,      isDefault: true,  defaultSource: def.source ?? null };
+      if (def)      return { ...def, isDefault: true, defaultSource: def.source ?? null };
       return null;
     };
 
-    const pending  = allSubmissions.filter(s => s.status === 'Pending');
     const groupMap = new Map();
     for (const s of pending) {
       if (!groupMap.has(s.char_name)) groupMap.set(s.char_name, { charName: s.char_name, spec: s.spec, submissions: [] });
       const current = resolveCurrent(s.char_name, s.spec, s.slot);
       groupMap.get(s.char_name).submissions.push({
         id: s.id, slot: s.slot,
-        current: current ? {
-          trueBis: current.trueBis, trueBisSource: resolveSource(current.trueBis),
-          raidBis: current.raidBis, raidBisSource: resolveSource(current.raidBis),
-          isDefault: current.isDefault, defaultSource: current.defaultSource,
-        } : null,
-        trueBis: s.true_bis, trueBisSource: resolveSource(s.true_bis),
-        raidBis: s.raid_bis, raidBisSource: resolveSource(s.raid_bis),
+        current,
+        trueBis: s.true_bis, trueBisSource: resolveSource(s, 'true_bis'),
+        raidBis: s.raid_bis, raidBisSource: resolveSource(s, 'raid_bis'),
         rationale: s.rationale, submittedAt: s.submitted_at,
       });
     }
 
-    const specChangeRequests = roster
-      .filter(r => r.pending_primary_spec)
+    const specChangeRequests = rosterPendingSpec
       .map(r => ({
-        charName:     r.char_name,
-        charId:       r.id,
-        currentSpec:  r.spec,
+        charName:      r.char_name,
+        charId:        r.id,
+        currentSpec:   r.spec,
         requestedSpec: r.pending_primary_spec,
       }));
 
@@ -321,7 +352,7 @@ router.post('/bis-review/approve', requireOfficer, async (c) => {
     const subs = await getBisSubmissions(db, teamId);
     const sub  = subs.find(s => s.id === id);
 
-    await approveBisSubmission(db, id, officerChar ?? username ?? 'Officer');
+    await approveBisSubmission(db, id, officerChar ?? username ?? 'Officer', sub?.char_id ?? null);
 
     if (sub?.char_id && sub?.slot) {
       await invalidateWornBisSlots(db, teamId, [{ charId: sub.char_id, slot: sub.slot }]);
@@ -343,7 +374,9 @@ router.post('/bis-review/reject', requireOfficer, async (c) => {
   if (!teamId) return c.json({ error: 'No team configured' }, 400);
   const db = c.env.DB;
   try {
-    await rejectBisSubmission(db, id, officerChar ?? username ?? 'Officer', officerNote);
+    const subs = await getBisSubmissions(db, teamId);
+    const sub  = subs.find(s => s.id === id);
+    await rejectBisSubmission(db, id, officerChar ?? username ?? 'Officer', officerNote, sub?.char_id ?? null);
     return c.json({ ok: true });
   } catch (err) {
     console.error('[ADMIN] bis-review reject error:', err);

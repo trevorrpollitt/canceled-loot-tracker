@@ -9,10 +9,10 @@
 import { Hono } from 'hono';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
-  getBisSubmissions, getItemDb, getEffectiveDefaultBis,
+  getBisSubmissionsForChar, getItemDbForArmorType, getEffectiveDefaultBisForSpec,
   batchUpsertBisSubmissions, clearPendingBisSubmission, clearRejectedBisSubmission,
   clearBisSubmission, resetBisRaidBisField,
-  getRoster, setPendingPrimarySpec,
+  getRosterMember, setPendingPrimarySpec,
 } from '../../../lib/db.js';
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, getArmorType, canUseWeapon, canDualWield, CLASS_SPECS, getCharSpecs } from '../../../lib/specs.js';
@@ -67,14 +67,8 @@ router.get('/', async (c) => {
   const db = c.env.DB;
 
   try {
-    const [roster, submissions, itemDb, effectiveBis] = await Promise.all([
-      getRoster(db, teamId),
-      getBisSubmissions(db, teamId),
-      getItemDb(db),
-      getEffectiveDefaultBis(db),
-    ]);
-
-    const rosterEntry = roster.find(r => charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase());
+    // Phase 1 — resolve the character's roster entry, active spec, and armor type
+    const rosterEntry = charId ? await getRosterMember(db, charId) : null;
     const charSpecs = rosterEntry
       ? getCharSpecs(rosterEntry)
       : { primary: c.get('session').user.spec, secondary: [], pending: null, all: [c.get('session').user.spec] };
@@ -87,15 +81,23 @@ router.get('/', async (c) => {
     const canonicalSpec = toCanonical(activeSpec);
     const armorType     = getArmorType(canonicalSpec);
 
-    const bySlot = Object.fromEntries(
-      submissions
-        .filter(s => s.char_id === charId &&
-          (!s.spec || s.spec.toLowerCase() === activeSpec.toLowerCase()))
-        .map(s => [s.slot, s])
-    );
+    // Phase 2 — narrow queries in parallel, scoped to this char/spec/armorType
+    const [submissions, itemDb, effectiveBis] = await Promise.all([
+      getBisSubmissionsForChar(db, teamId, charId, charName),
+      getItemDbForArmorType(db, armorType),
+      getEffectiveDefaultBisForSpec(db, canonicalSpec),
+    ]);
 
-    const specRows     = effectiveBis.filter(d => d.spec === canonicalSpec);
-    const specDefaults = applyRaidBisInference(specRows, itemDb);
+    // Keep the most recently submitted row per slot (submissions ordered DESC by submitted_at).
+    // When both an Approved row and a newer Pending row exist for the same slot, the Pending
+    // one comes first and wins — so the user sees their in-flight request, not the old state.
+    const bySlot = {};
+    for (const s of submissions) {
+      if (s.spec && s.spec.toLowerCase() !== activeSpec.toLowerCase()) continue;
+      if (!bySlot[s.slot]) bySlot[s.slot] = s;
+    }
+
+    const specDefaults  = applyRaidBisInference(effectiveBis);
     const defaultBySlot = Object.fromEntries(specDefaults.map(d => [d.slot, d]));
 
     const slots = ALL_SLOTS.map(slot => {
@@ -161,8 +163,7 @@ router.post('/', async (c) => {
   if (!charName)  return c.json({ error: 'No character linked to this account' }, 400);
 
   const db = c.env.DB;
-  const roster      = await getRoster(db, teamId);
-  const rosterEntry = roster.find(r => charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase());
+  const rosterEntry = charId ? await getRosterMember(db, charId) : null;
   const charSpecs   = rosterEntry
     ? getCharSpecs(rosterEntry)
     : { primary: c.get('session').user.spec, secondary: [], all: [c.get('session').user.spec] };
@@ -236,8 +237,7 @@ router.post('/request-spec-change', async (c) => {
 
   const db = c.env.DB;
   try {
-    const roster      = await getRoster(db, teamId);
-    const rosterEntry = roster.find(r => charId ? r.id === charId : r.char_name.toLowerCase() === charName.toLowerCase());
+    const rosterEntry = charId ? await getRosterMember(db, charId) : null;
     if (!rosterEntry) return c.json({ error: 'Character not found in roster' }, 404);
 
     const charSpecs = getCharSpecs(rosterEntry);
