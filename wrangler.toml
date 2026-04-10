@@ -20,6 +20,7 @@ database_name = "canceled-loot-tracker"
 database_id   = "local"
 
 [env.production]
+name = "canceled-loot-tracker"
 [[env.production.d1_databases]]
 binding       = "DB"
 database_name = "canceled-loot-tracker"
