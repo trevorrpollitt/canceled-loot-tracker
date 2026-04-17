@@ -34,9 +34,9 @@ function normalizeBisSub(s) {
     spec:          s.spec         ?? '',
     status:        s.status       ?? '',
     trueBis:       s.true_bis     ?? '',
-    trueBisItemId: s.true_bis_item_id  || s.true_bis_blizzard_id  || '',
+    trueBisItemId: s.true_bis_item_id  ?? '',
     raidBis:       s.raid_bis     ?? '',
-    raidBisItemId: s.raid_bis_item_id  || s.raid_bis_blizzard_id  || '',
+    raidBisItemId: s.raid_bis_item_id  ?? '',
     rationale:     s.rationale    ?? '',
     officerNote:   s.officer_note ?? '',
   };

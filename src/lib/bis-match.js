@@ -98,9 +98,9 @@ export function applyRaidBisInference(rows, itemDb = null) {
       spec:               row.spec,
       slot:               row.slot,
       trueBis:            row.true_bis              ?? row.trueBis           ?? '',
-      trueBisItemId:      row.true_bis_item_id       || row.trueBisItemId     || row.true_bis_blizzard_id  || '',
+      trueBisItemId:      row.true_bis_item_id       ?? row.trueBisItemId     ?? '',
       raidBis:            row.raid_bis              ?? row.raidBis           ?? '',
-      raidBisItemId:      row.raid_bis_item_id       || row.raidBisItemId     || row.raid_bis_blizzard_id  || '',
+      raidBisItemId:      row.raid_bis_item_id       ?? row.raidBisItemId     ?? '',
       // Pre-joined source type — present when rows come from getEffectiveDefaultBisForSpec
       true_bis_source_type: row.true_bis_source_type ?? row.trueBisSourceType ?? null,
     };

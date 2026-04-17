@@ -447,15 +447,15 @@ export async function getBisSubmissionsForChar(db, teamId, charId, charName) {
   return cachedRead(`bis_sub_char:${charId || charName}`, TTL.BRIEF, () =>
     all(db,
       `SELECT s.*,
-              -- bis_submissions stores Blizzard item IDs directly in true/raid_bis_item_id (TEXT).
-              -- Alias them explicitly so they shadow s.* and are always non-null strings.
-              COALESCE(s.true_bis_item_id, '') AS true_bis_item_id,
-              COALESCE(s.raid_bis_item_id, '') AS raid_bis_item_id,
-              i3.item_id     AS true_bis_blizzard_id,
+              -- true_bis_item_id in the DB is inconsistent: old Sheets-migrated rows
+              -- store the item_db.id (D1 row PK), newer web-form rows store the
+              -- Blizzard item_id, and some are NULL.  Always derive the authoritative
+              -- Blizzard item ID via name join so the alias shadows the raw column.
+              COALESCE(i3.item_id, '') AS true_bis_item_id,
+              COALESCE(i4.item_id, '') AS raid_bis_item_id,
               i3.difficulty  AS true_bis_difficulty,
               i3.source_type AS true_bis_source_type,
               i3.source_name AS true_bis_source_name,
-              i4.item_id     AS raid_bis_blizzard_id,
               i4.difficulty  AS raid_bis_difficulty,
               i4.source_type AS raid_bis_source_type,
               i4.source_name AS raid_bis_source_name
@@ -478,15 +478,12 @@ export async function getBisSubmissionsPending(db, teamId) {
   return cachedRead(`bis_submissions_pending:${teamId}`, TTL.BRIEF, () =>
     all(db,
       `SELECT s.*,
-              -- bis_submissions stores Blizzard item IDs directly in true/raid_bis_item_id (TEXT).
-              -- Alias explicitly so they shadow s.* and are always non-null strings.
-              COALESCE(s.true_bis_item_id, '') AS true_bis_item_id,
-              COALESCE(s.raid_bis_item_id, '') AS raid_bis_item_id,
-              i3.item_id     AS true_bis_blizzard_id,
+              -- Always derive Blizzard item ID via name join (raw column is mixed-format).
+              COALESCE(i3.item_id, '') AS true_bis_item_id,
+              COALESCE(i4.item_id, '') AS raid_bis_item_id,
               i3.difficulty  AS true_bis_difficulty,
               i3.source_type AS true_bis_source_type,
               i3.source_name AS true_bis_source_name,
-              i4.item_id     AS raid_bis_blizzard_id,
               i4.difficulty  AS raid_bis_difficulty,
               i4.source_type AS raid_bis_source_type,
               i4.source_name AS raid_bis_source_name
@@ -504,18 +501,14 @@ export async function getBisSubmissions(db, teamId) {
   return cachedRead(`bis_submissions:${teamId}`, TTL.BRIEF, () =>
     all(db,
       `SELECT s.*,
-              -- bis_submissions stores Blizzard item IDs directly in true/raid_bis_item_id (TEXT).
-              -- Alias explicitly so they shadow s.* and are always non-null strings.
-              COALESCE(s.true_bis_item_id, '') AS true_bis_item_id,
-              COALESCE(s.raid_bis_item_id, '') AS raid_bis_item_id,
-              -- Source info for true_bis item (by name) — used by BIS review
-              i3.item_id    AS true_bis_blizzard_id,
-              i3.difficulty AS true_bis_difficulty,
+              -- Always derive Blizzard item ID via name join (raw column is mixed-format).
+              COALESCE(i3.item_id, '') AS true_bis_item_id,
+              COALESCE(i4.item_id, '') AS raid_bis_item_id,
+              -- Source info (by name) — used by BIS review
+              i3.difficulty  AS true_bis_difficulty,
               i3.source_type AS true_bis_source_type,
               i3.source_name AS true_bis_source_name,
-              -- Source info for raid_bis item (by name) — used by BIS review
-              i4.item_id    AS raid_bis_blizzard_id,
-              i4.difficulty AS raid_bis_difficulty,
+              i4.difficulty  AS raid_bis_difficulty,
               i4.source_type AS raid_bis_source_type,
               i4.source_name AS raid_bis_source_name
        FROM bis_submissions s
