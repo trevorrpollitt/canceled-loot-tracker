@@ -129,13 +129,13 @@ function extractWornBis(combatantEvents, actors, rosterLookup, bisLookup, itemDb
 
       const rawTrack = getItemTrack(gearItem.bonusIDs, trackRanges);
       // Crafted items are identified by a specific bonus ID in the global config
-      // (wcl_crafted_bonus_ids). They have no upgrade-track bonus IDs so rawTrack
-      // will be 'Unknown', but we still record them as 'Crafted' for BIS/Other slots.
-      // Other Unknown-track items (old gear, world drops, etc.) are skipped.
-      const matchedCraftedId = rawTrack === 'Unknown'
-        ? (gearItem.bonusIDs ?? []).find(id => craftedBonusIds.has(id))
-        : undefined;
-      const isCrafted = matchedCraftedId !== undefined;
+      // (wcl_crafted_bonus_ids). Check unconditionally — crafted gear can be upgraded
+      // via Artisan's Acuity, which adds a track bonus ID alongside the crafted one.
+      // Without this check, upgraded crafted items get treated as regular gear and
+      // fail to match <Crafted> BIS entries.
+      // Unknown-track non-crafted items (old gear, world drops, etc.) are skipped.
+      const matchedCraftedId = (gearItem.bonusIDs ?? []).find(id => craftedBonusIds.has(id));
+      const isCrafted        = matchedCraftedId !== undefined;
       if (rawTrack === 'Unknown') {
         log.verbose(`[worn-bis] ${char.char_name} slot ${slotName} item ${gearItem.id}: Unknown track — bonusIDs=[${(gearItem.bonusIDs ?? []).join(',')}] isCrafted=${isCrafted}${isCrafted ? ` (matched ${matchedCraftedId})` : ''}`);
         if (!isCrafted) continue;
@@ -351,11 +351,13 @@ export async function runWclSyncForTeam(db, team) {
   log.warn(`[wcl-sync] Manual sync complete for team "${team.name}"`);
 }
 
+const WORN_BIS_RESYNC_REPORT_LIMIT = 5;
+
 export async function runWclSyncWornBisOnly(db, team) {
-  log.warn(`[wcl-sync] Worn BIS-only resync triggered for team "${team.name}"`);
+  log.warn(`[wcl-sync] Worn BIS-only resync triggered for team "${team.name}" (last ${WORN_BIS_RESYNC_REPORT_LIMIT} raids)`);
   const ctx = await buildWclContext(db);
   const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap } = ctx;
-  await syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap, { wornBisOnly: true });
+  await syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap, { wornBisOnly: true, maxReports: WORN_BIS_RESYNC_REPORT_LIMIT });
   log.warn(`[wcl-sync] Worn BIS-only resync complete for team "${team.name}"`);
 }
 
@@ -364,7 +366,7 @@ export async function runWclSyncWornBisOnly(db, team) {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, clientId, clientSecret, itemDbMap, options = {}) {
-  const { wornBisOnly = false } = options;
+  const { wornBisOnly = false, maxReports = 0 } = options;
   const config     = await getTeamConfig(db, team.id);
   const wclGuildId = config.wcl_guild_id ? Number(config.wcl_guild_id) : null;
 
@@ -408,6 +410,12 @@ async function syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByCl
       .map(([code, d]) => ({ code, startTime: d.startTime, zone: { name: d.zoneName }, isRecheck: true })),
   ];
   allReports.sort((a, b) => a.startTime - b.startTime);
+
+  // Trim to N most recent when a cap is requested (e.g. manual resync button)
+  if (maxReports > 0 && allReports.length > maxReports) {
+    const dropped = allReports.splice(0, allReports.length - maxReports);
+    log.verbose(`[wcl-sync] Team "${team.name}": capped to ${maxReports} most recent reports (dropped ${dropped.length} older)`);
+  }
 
   const recheckCount = allReports.filter(r => r.isRecheck).length;
   if (recheckCount) {
@@ -663,26 +671,30 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
   const wornBisRows = extractWornBis(wornBisCombatantEvents, actors, rosterLookup, bisLookup ?? new Map(), itemDbMap ?? new Map(), trackRanges, craftedBonusIds ?? new Set());
 
   // For slots where BIS is <Tier>, extractWornBis can't match (it doesn't have
-  // tierItemsByClass). Pull the track from snapshotRows instead.
-  for (const snap of snapshotRows) {
-    if (!snap.tierDetail) continue;
-    const charSpec   = specByCharId.get(snap.charId) ?? snap.spec ?? '';
-    const charBisMap = (bisLookup ?? new Map()).get(`${snap.charId}:${charSpec}`)
-                    ?? (bisLookup ?? new Map()).get(`name:${snap.charName.toLowerCase()}`);
+  // tierItemsByClass). Scan gear from all boss combatant events directly so:
+  //   • Every boss is checked (not just fightForSnapshot)
+  //   • A tier piece received/equipped mid-raid is captured on the boss where
+  //     the player first wore it, and the best track across all bosses wins
+  for (const event of wornBisCombatantEvents) {
+    const actor = actors.find(a => a.id === event.sourceID);
+    if (!actor) continue;
+    const char = resolveActor(actor, rosterLookup);
+    if (!char) continue;
+    const charSpec   = specByCharId.get(char.id) ?? char.spec ?? '';
+    const charBisMap = (bisLookup ?? new Map()).get(`${char.id}:${charSpec}`)
+                    ?? (bisLookup ?? new Map()).get(`name:${char.char_name.toLowerCase()}`);
     if (!charBisMap) continue;
-    for (const piece of snap.tierDetail.split('|').filter(Boolean)) {
-      const colonIdx = piece.lastIndexOf(':');
-      if (colonIdx < 0) continue;
-      const slot  = piece.slice(0, colonIdx);
-      const track = piece.slice(colonIdx + 1);
+    const tierItemMap = tierItemsByClass.get(actor.subType) ?? new Map();
+    const tierPieces  = findTierPieces(event.gear, tierItemMap, trackRanges);
+    for (const { slot, track } of tierPieces) {
       if (!track || track === 'Unknown') continue;
       const charBis = charBisMap.get(slot);
       if (!charBis) continue;
       const matchesOverall = charBis.trueBis === '<Tier>';
       const matchesRaid    = charBis.raidBis  === '<Tier>';
       if (!matchesOverall && !matchesRaid) continue;
-      const key  = `${snap.charId}:${charSpec}:${slot}`;
-      const prev = wornBisRows.get(key) ?? { charId: snap.charId, charName: snap.charName, spec: charSpec, slot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
+      const key  = `${char.id}:${charSpec}:${slot}`;
+      const prev = wornBisRows.get(key) ?? { charId: char.id, charName: char.char_name, spec: charSpec, slot, overallBISTrack: '', raidBISTrack: '', otherTrack: '' };
       wornBisRows.set(key, {
         ...prev,
         overallBISTrack: matchesOverall ? mergeTrack(prev.overallBISTrack, track) : prev.overallBISTrack,
