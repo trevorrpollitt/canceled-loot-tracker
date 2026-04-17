@@ -10,6 +10,7 @@ import {
   getLootLogForChar, getBisSubmissionsForChar, getEffectiveDefaultBisForSpec,
   getWornBisForChar, getRosterMember, getGlobalConfig, getTierItems,
   upsertWornBis, upsertTierSnapshot,
+  getItemDb, getBisSubmissions, getEffectiveDefaultBis, getRoster,
 } from '../../../lib/db.js';
 import { toCanonical, getCharSpecs, getArmorType, buildTrackRanges, getItemTrack, mergeTrack } from '../../../lib/specs.js';
 import { matchesBis, applyRaidBisInference, PAIRED_BIS_SLOTS } from '../../../lib/bis-match.js';
@@ -198,7 +199,7 @@ router.post('/simc', requireAuth, async (c) => {
 
     for (const { slot, itemId, bonusIds } of gear) {
       const rawTrack       = getItemTrack(bonusIds, trackRanges);
-      const matchedCrafted = rawTrack === 'Unknown' ? bonusIds.find(id => craftedBonusIds.has(id)) : undefined;
+      const matchedCrafted = bonusIds.find(id => craftedBonusIds.has(id));
       const isCrafted      = matchedCrafted !== undefined;
       if (rawTrack === 'Unknown' && !isCrafted) continue;
 
