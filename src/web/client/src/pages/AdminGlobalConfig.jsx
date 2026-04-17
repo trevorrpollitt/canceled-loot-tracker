@@ -89,6 +89,10 @@ export default function AdminGlobalConfig() {
   const [migrating,     setMigrating]     = useState(false);
   const [migrateResult, setMigrateResult] = useState(null);
 
+  // TEMP: BIS item ID backfill
+  const [bisBackfilling,  setBisBackfilling]  = useState(false);
+  const [bisBackfillResult, setBisBackfillResult] = useState(null);
+
   // ── Load ────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -141,6 +145,27 @@ export default function AdminGlobalConfig() {
       ['wcl_crafted_bonus_ids', wclCraftedBonuses],
     ]));
     setWclSaving(false);
+  }
+
+  async function runBisBackfill() {
+    setBisBackfilling(true); setBisBackfillResult(null);
+    try {
+      const r = await fetch(apiPath('/api/admin/backfill-bis-item-ids'), {
+        method: 'POST', credentials: 'include',
+      });
+      const d = await r.json();
+      if (d.ok) {
+        const msg = `Done — ${d.rowsProcessed} rows processed.` +
+          (d.notFound?.length ? ` ${d.notFound.length} item(s) not in item_db (set to null): ${d.notFound.join(', ')}` : '');
+        setBisBackfillResult({ ok: true, msg });
+      } else {
+        setBisBackfillResult({ error: d.error ?? 'Backfill failed' });
+      }
+    } catch {
+      setBisBackfillResult({ error: 'Request failed' });
+    } finally {
+      setBisBackfilling(false);
+    }
   }
 
   async function runMigration() {
@@ -247,6 +272,32 @@ export default function AdminGlobalConfig() {
           {wclSaving ? 'Saving…' : 'Save'}
         </button>
         <ResultMsg result={wclResult} />
+      </div>
+
+      {/* ── TEMP: BIS item ID backfill ───────────────────────────────────── */}
+      {/* TODO: Remove this card (and the /api/admin/backfill-bis-item-ids endpoint
+               in admin.js) after running it once in production. */}
+      <div className="card" style={{ marginTop: 24, borderColor: '#7a4f00' }}>
+        <div className="card-title" style={{ color: '#f0a030' }}>⚠ One-Time Data Fix — Remove After Use</div>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>
+          Normalises <code>true_bis_item_id</code> / <code>raid_bis_item_id</code> in{' '}
+          <code>bis_submissions</code> to consistent Blizzard item IDs. The column previously
+          contained a mix of D1 row PKs (from the Sheets migration), real Blizzard IDs, and NULLs,
+          which broke Wowhead tooltips on personal BIS submissions.
+        </p>
+        <p style={{ fontSize: 13, color: '#f0a030', marginBottom: 16 }}>
+          Run once after deploying, then remove this card and the{' '}
+          <code>POST /api/admin/backfill-bis-item-ids</code> endpoint from{' '}
+          <code>src/web/server/routes/admin.js</code>.
+        </p>
+        <button className="btn-primary" onClick={runBisBackfill} disabled={bisBackfilling}>
+          {bisBackfilling ? 'Running…' : 'Run BIS Item ID Backfill'}
+        </button>
+        {bisBackfillResult && (
+          <p style={{ marginTop: 12, fontSize: 13, color: bisBackfillResult.ok ? 'var(--bis)' : 'var(--danger, #e05)' }}>
+            {bisBackfillResult.ok ? bisBackfillResult.msg : `Error: ${bisBackfillResult.error}`}
+          </p>
+        )}
       </div>
 
       {/* ── Sheets → D1 Migration ────────────────────────────────────────── */}

@@ -20,6 +20,7 @@ import {
   getEffectiveDefaultBis, getEffectiveDefaultBisForSpec, getAllTeams, getGlobalConfig, setGlobalConfigValue,
   getRclcResponseMapRows, setRclcResponseMap, getRosterPendingSpecChanges,
   getBisSubmissionsPending, getBisSubmissionsForChar, rebuildLootSummary,
+  invalidateBisSubmissionsCache,
 } from '../../../lib/db.js';
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand, getCharSpecs } from '../../../lib/specs.js';
@@ -855,6 +856,64 @@ router.post('/rebuild-loot-summary', requireOfficer, async (c) => {
   } catch (err) {
     console.error('[admin] rebuild-loot-summary error:', err);
     return c.json({ error: err.message ?? 'Rebuild failed' }, 500);
+  }
+});
+
+// ── POST /api/admin/backfill-bis-item-ids ─────────────────────────────────────
+// TEMPORARY — normalises bis_submissions.true_bis_item_id / raid_bis_item_id to
+// Blizzard item IDs (mixed legacy data from the Sheets migration).
+// Remove this endpoint after running it once in production.
+
+router.post('/backfill-bis-item-ids', requireGlobalOfficer, async (c) => {
+  const db = c.env.DB;
+  const SENTINELS = new Set(['<Tier>', '<Catalyst>', '<Crafted>']);
+
+  try {
+    // Build name → Blizzard item_id lookup
+    const itemDbRows = await db.prepare('SELECT item_id, name FROM item_db').all()
+      .then(r => r.results);
+    const itemIdByName = new Map(
+      itemDbRows.map(r => [r.name.toLowerCase(), String(r.item_id)])
+    );
+
+    function resolve(name) {
+      if (!name || SENTINELS.has(name)) return null;
+      return itemIdByName.get(name.toLowerCase()) ?? null;
+    }
+
+    // Load every bis_submissions row
+    const rows = await db.prepare(
+      'SELECT id, true_bis, true_bis_item_id, raid_bis, raid_bis_item_id FROM bis_submissions'
+    ).all().then(r => r.results);
+
+    // Build UPDATE statements
+    const stmts = rows.map(row =>
+      db.prepare('UPDATE bis_submissions SET true_bis_item_id = ?, raid_bis_item_id = ? WHERE id = ?')
+        .bind(resolve(row.true_bis), resolve(row.raid_bis), row.id)
+    );
+
+    // Execute in chunks (D1 batch limit = 100)
+    await batchInsert(db, stmts);
+
+    // Bust in-process cache so next reads reflect the new values
+    invalidateBisSubmissionsCache();
+
+    // Collect items that had no item_db match (set to NULL)
+    const notFound = [...new Set(
+      rows.flatMap(row => {
+        const missing = [];
+        if (row.true_bis && !SENTINELS.has(row.true_bis) && !itemIdByName.has(row.true_bis.toLowerCase()))
+          missing.push(row.true_bis);
+        if (row.raid_bis && !SENTINELS.has(row.raid_bis) && !itemIdByName.has(row.raid_bis.toLowerCase()))
+          missing.push(row.raid_bis);
+        return missing;
+      })
+    )].sort();
+
+    return c.json({ ok: true, rowsProcessed: rows.length, notFound });
+  } catch (err) {
+    console.error('[admin] backfill-bis-item-ids error:', err);
+    return c.json({ error: err.message ?? 'Backfill failed' }, 500);
   }
 });
 

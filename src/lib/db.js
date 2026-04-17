@@ -447,19 +447,15 @@ export async function getBisSubmissionsForChar(db, teamId, charId, charName) {
   return cachedRead(`bis_sub_char:${charId || charName}`, TTL.BRIEF, () =>
     all(db,
       `SELECT s.*,
-              COALESCE(i1.item_id, '') AS true_bis_item_id,
-              COALESCE(i2.item_id, '') AS raid_bis_item_id,
-              i3.item_id     AS true_bis_blizzard_id,
+              COALESCE(s.true_bis_item_id, '') AS true_bis_item_id,
+              COALESCE(s.raid_bis_item_id, '') AS raid_bis_item_id,
               i3.difficulty  AS true_bis_difficulty,
               i3.source_type AS true_bis_source_type,
               i3.source_name AS true_bis_source_name,
-              i4.item_id     AS raid_bis_blizzard_id,
               i4.difficulty  AS raid_bis_difficulty,
               i4.source_type AS raid_bis_source_type,
               i4.source_name AS raid_bis_source_name
        FROM bis_submissions s
-       LEFT JOIN item_db i1 ON i1.id = s.true_bis_item_id
-       LEFT JOIN item_db i2 ON i2.id = s.raid_bis_item_id
        LEFT JOIN item_db i3 ON LOWER(i3.name) = LOWER(s.true_bis)
        LEFT JOIN item_db i4 ON LOWER(i4.name) = LOWER(s.raid_bis)
        WHERE s.team_id = ?
@@ -478,19 +474,15 @@ export async function getBisSubmissionsPending(db, teamId) {
   return cachedRead(`bis_submissions_pending:${teamId}`, TTL.BRIEF, () =>
     all(db,
       `SELECT s.*,
-              COALESCE(i1.item_id, '') AS true_bis_item_id,
-              COALESCE(i2.item_id, '') AS raid_bis_item_id,
-              i3.item_id     AS true_bis_blizzard_id,
+              COALESCE(s.true_bis_item_id, '') AS true_bis_item_id,
+              COALESCE(s.raid_bis_item_id, '') AS raid_bis_item_id,
               i3.difficulty  AS true_bis_difficulty,
               i3.source_type AS true_bis_source_type,
               i3.source_name AS true_bis_source_name,
-              i4.item_id     AS raid_bis_blizzard_id,
               i4.difficulty  AS raid_bis_difficulty,
               i4.source_type AS raid_bis_source_type,
               i4.source_name AS raid_bis_source_name
        FROM bis_submissions s
-       LEFT JOIN item_db i1 ON i1.id = s.true_bis_item_id
-       LEFT JOIN item_db i2 ON i2.id = s.raid_bis_item_id
        LEFT JOIN item_db i3 ON LOWER(i3.name) = LOWER(s.true_bis)
        LEFT JOIN item_db i4 ON LOWER(i4.name) = LOWER(s.raid_bis)
        WHERE s.team_id = ? AND s.status = 'Pending'
@@ -504,28 +496,31 @@ export async function getBisSubmissions(db, teamId) {
   return cachedRead(`bis_submissions:${teamId}`, TTL.BRIEF, () =>
     all(db,
       `SELECT s.*,
-              -- Blizzard item IDs via FK (existing)
-              COALESCE(i1.item_id, '') AS true_bis_item_id,
-              COALESCE(i2.item_id, '') AS raid_bis_item_id,
-              -- Source info for true_bis item (by name) — used by BIS review
-              i3.item_id    AS true_bis_blizzard_id,
-              i3.difficulty AS true_bis_difficulty,
+              COALESCE(s.true_bis_item_id, '') AS true_bis_item_id,
+              COALESCE(s.raid_bis_item_id, '') AS raid_bis_item_id,
+              -- Source info for BIS review (source badges, difficulty)
+              i3.difficulty  AS true_bis_difficulty,
               i3.source_type AS true_bis_source_type,
               i3.source_name AS true_bis_source_name,
-              -- Source info for raid_bis item (by name) — used by BIS review
-              i4.item_id    AS raid_bis_blizzard_id,
-              i4.difficulty AS raid_bis_difficulty,
+              i4.difficulty  AS raid_bis_difficulty,
               i4.source_type AS raid_bis_source_type,
               i4.source_name AS raid_bis_source_name
        FROM bis_submissions s
-       LEFT JOIN item_db i1 ON i1.id = s.true_bis_item_id
-       LEFT JOIN item_db i2 ON i2.id = s.raid_bis_item_id
        LEFT JOIN item_db i3 ON LOWER(i3.name) = LOWER(s.true_bis)
        LEFT JOIN item_db i4 ON LOWER(i4.name) = LOWER(s.raid_bis)
        WHERE s.team_id = ? ORDER BY s.submitted_at DESC`,
       teamId
     )
   );
+}
+
+/**
+ * Bust all in-process cache entries for bis_submissions.
+ * Call after any bulk write that touches multiple teams/chars at once.
+ */
+export function invalidateBisSubmissionsCache() {
+  cacheInvalidatePrefix('bis_submissions');
+  cacheInvalidatePrefix('bis_sub_char:');
 }
 
 export async function upsertBisSubmission(db, teamId, { charId, charName, spec, slot, trueBis, trueBisItemId, raidBis, raidBisItemId, rationale }) {
