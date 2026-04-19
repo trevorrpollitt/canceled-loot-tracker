@@ -1,9 +1,11 @@
 /**
  * routes/loot.js — Loot Log endpoints.
  *
- * GET  /api/loot/history         Officer — per-player loot totals (no itemised loot)
- * GET  /api/loot/history/:charId Officer — itemised loot for one character (lazy)
- * POST /api/loot/import          Officer — import a RCLC CSV export
+ * GET   /api/loot/history                Officer — per-player loot totals (no itemised loot)
+ * GET   /api/loot/history/:charId        Officer — itemised loot for one character (lazy)
+ * GET   /api/loot/audit                  Officer — full log grouped by date for audit view
+ * PATCH /api/loot/entries/upgrade-type   Officer — patch upgrade_type on entries
+ * POST  /api/loot/import                 Officer — import a RCLC CSV export
  */
 
 import { Hono } from 'hono';
@@ -11,7 +13,7 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import {
   getRoster, getRclcResponseMap,
   getLootLog, getLootLogForChar, getLootSummary,
-  appendLootEntries, patchLootEntryDifficulties, patchLootEntryIgnored,
+  appendLootEntries, patchLootEntryDifficulties, patchLootEntryUpgradeType, patchLootEntryIgnored,
   reassignLootEntries, backfillLootEntryIds, getRaids,
   getTeamConfig,
 } from '../../../lib/db.js';
@@ -143,6 +145,34 @@ router.get('/history/:charId', async (c) => {
   }
 });
 
+// ── GET /audit ────────────────────────────────────────────────────────────────
+// Full loot log for the date-grouped audit view — all entries incl. ignored.
+
+router.get('/audit', async (c) => {
+  if (!c.get('session').user?.isOfficer) {
+    return c.json({ error: 'Officer access required.' }, 403);
+  }
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
+  try {
+    const [lootLog, roster] = await Promise.all([
+      getLootLog(db, teamId),
+      getRoster(db, teamId),
+    ]);
+    const entries = [...lootLog].sort((a, b) =>
+      b.date.localeCompare(a.date) || b.id - a.id
+    );
+    const rosterMembers = roster
+      .filter(r => r.status === 'Active' || r.status === 'Bench')
+      .map(r => ({ charId: r.id, charName: r.char_name, spec: r.spec, status: r.status }))
+      .sort((a, b) => a.charName.localeCompare(b.charName));
+    return c.json({ entries, rosterMembers });
+  } catch (err) {
+    console.error('[LOOT AUDIT]', err);
+    return c.json({ error: 'Failed to load loot audit data.' }, 500);
+  }
+});
+
 // ── POST /reprocess ───────────────────────────────────────────────────────────
 
 router.post('/reprocess', async (c) => {
@@ -182,6 +212,25 @@ router.patch('/entries/reassign', async (c) => {
 
   await reassignLootEntries(db, teamId, resolved);
   return c.json({ updated: resolved.length });
+});
+
+// ── PATCH /entries/upgrade-type ───────────────────────────────────────────────
+
+router.patch('/entries/upgrade-type', async (c) => {
+  if (!c.get('session').user?.isOfficer) {
+    return c.json({ error: 'Officer access required.' }, 403);
+  }
+  const { corrections } = await c.req.json();
+  if (!Array.isArray(corrections) || !corrections.length) {
+    return c.json({ error: 'corrections must be a non-empty array of { id, upgradeType }.' }, 400);
+  }
+  const VALID_TYPES = new Set(['BIS', 'Non-BIS', 'Tertiary']);
+  const valid = corrections.filter(({ id, upgradeType }) => id && VALID_TYPES.has(upgradeType));
+  if (!valid.length) return c.json({ error: 'No valid corrections supplied.' }, 400);
+  const db = c.env.DB;
+  const { teamId } = c.get('session').user;
+  await patchLootEntryUpgradeType(db, teamId, valid);
+  return c.json({ updated: valid.length });
 });
 
 // ── PATCH /ignored ────────────────────────────────────────────────────────────

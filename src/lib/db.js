@@ -361,6 +361,17 @@ export async function patchLootEntryDifficulties(db, teamId, corrections) {
   await rebuildLootSummary(db, teamId);
 }
 
+export async function patchLootEntryUpgradeType(db, teamId, corrections) {
+  // corrections: [{ id, upgradeType }]
+  const VALID = new Set(['BIS', 'Non-BIS', 'Tertiary']);
+  const stmt = db.prepare('UPDATE loot_log SET upgrade_type = ? WHERE id = ? AND team_id = ?');
+  for (const { id, upgradeType } of corrections) {
+    if (VALID.has(upgradeType)) await stmt.bind(upgradeType, id, teamId).run();
+  }
+  cacheInvalidatePrefix('loot_log:');
+  await rebuildLootSummary(db, teamId);
+}
+
 export async function patchLootEntryIgnored(db, teamId, ids, ignored) {
   const val = ignored ? 1 : 0;
   const placeholders = ids.map(() => '?').join(', ');

@@ -1,6 +1,7 @@
 import { apiPath } from '../lib/api.js';
 import { useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import LootAudit from './LootAudit.jsx';
 
 export default function LootImport() {
   const [file, setFile]         = useState(null);
@@ -158,6 +159,7 @@ export default function LootImport() {
         </div>
         );
       })()}
+      <LootAudit />
     </div>
   );
 }
