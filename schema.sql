@@ -231,6 +231,13 @@ CREATE TABLE default_bis_overrides (
   PRIMARY KEY (spec, slot, source)
 );
 
+-- Tracks which schema migrations have been applied (via the admin DB Migrations UI or runMigrations()).
+-- Bootstrapped automatically by getAppliedMigrations() — not required to exist before first use.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  name       TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- ── Sentinel rows — satisfy FK constraints for any legacy bis_submissions rows ──
 -- team_id=0 / char_id=0 rows are excluded from all normal queries via
 -- WHERE id > 0 on teams and WHERE team_id = ? on roster.

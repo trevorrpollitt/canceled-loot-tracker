@@ -21,7 +21,9 @@ import {
   getRclcResponseMapRows, setRclcResponseMap, getRosterPendingSpecChanges,
   getBisSubmissionsPending, getBisSubmissionsForChar, rebuildLootSummary,
   invalidateBisSubmissionsCache,
+  getAppliedMigrations, runMigrations,
 } from '../../../lib/db.js';
+import { MIGRATIONS } from '../../../lib/migrations.js';
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand, getCharSpecs } from '../../../lib/specs.js';
 import { runWclSyncForTeam, runWclSyncWornBisOnly, runAttendanceBackfill } from '../../../lib/wcl-sync.js';
@@ -934,6 +936,39 @@ router.post('/backfill-bis-item-ids', requireGlobalOfficer, async (c) => {
   } catch (err) {
     console.error('[admin] backfill-bis-item-ids error:', err);
     return c.json({ error: err.message ?? 'Backfill failed' }, 500);
+  }
+});
+
+// ── GET /api/admin/db-migrations ──────────────────────────────────────────────
+
+router.get('/db-migrations', requireGlobalOfficer, async (c) => {
+  const db = c.env.DB;
+  try {
+    const applied = await getAppliedMigrations(db);
+    const status = MIGRATIONS.map(m => ({
+      name:        m.name,
+      description: m.description,
+      applied:     applied.has(m.name),
+    }));
+    return c.json({ migrations: status });
+  } catch (err) {
+    console.error('[admin] db-migrations GET error:', err);
+    return c.json({ error: err.message ?? 'Failed to load migration status' }, 500);
+  }
+});
+
+// ── POST /api/admin/db-migrations/run ─────────────────────────────────────────
+
+router.post('/db-migrations/run', requireGlobalOfficer, async (c) => {
+  const db = c.env.DB;
+  try {
+    const results = await runMigrations(db, MIGRATIONS);
+    const appliedCount = results.filter(r => r.status === 'applied').length;
+    const errorCount   = results.filter(r => r.status === 'error').length;
+    return c.json({ ok: errorCount === 0, results, appliedCount, errorCount });
+  } catch (err) {
+    console.error('[admin] db-migrations run error:', err);
+    return c.json({ error: err.message ?? 'Migration run failed' }, 500);
   }
 });
 
