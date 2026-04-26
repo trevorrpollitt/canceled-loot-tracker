@@ -744,7 +744,7 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
     date:        raidDate,
     instance,
     difficulty:  difficultyLabel,
-    attendeeIds: attendeeIds.join('|'),
+    attendeeIds,
   };
 
   // ── Raid Encounters rows ─────────────────────────────────────────────────────
