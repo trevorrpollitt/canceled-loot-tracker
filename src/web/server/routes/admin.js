@@ -24,7 +24,7 @@ import {
 } from '../../../lib/db.js';
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand, getCharSpecs } from '../../../lib/specs.js';
-import { runWclSyncForTeam, runWclSyncWornBisOnly } from '../../../lib/wcl-sync.js';
+import { runWclSyncForTeam, runWclSyncWornBisOnly, runAttendanceBackfill } from '../../../lib/wcl-sync.js';
 import {
   getTeamRegistry      as sheetsGetTeamRegistry,
   getGlobalConfig      as sheetsGetGlobalConfig,
@@ -449,6 +449,26 @@ router.post('/wcl-sync-worn-bis', requireOfficer, async (c) => {
   } catch (err) {
     console.error('[admin] WCL worn BIS resync error:', err);
     return c.json({ error: err.message ?? 'Sync failed' }, 500);
+  }
+});
+
+// ── POST /api/admin/resync-attendance ─────────────────────────────────────────
+// TEMPORARY — backfills raid_attendees from WCL CombatantInfo for all existing
+// raids. Only fixes attendance; does not update worn BIS, tier snapshots, or
+// encounters. Remove after running once in production.
+
+router.post('/resync-attendance', requireOfficer, async (c) => {
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
+  const allTeams = await getAllTeams(db);
+  const team = allTeams.find(t => t.id === teamId);
+  if (!team) return c.json({ error: 'Team not found' }, 404);
+  try {
+    const result = await runAttendanceBackfill(db, team);
+    return c.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[admin] resync-attendance error:', err);
+    return c.json({ error: err.message ?? 'Backfill failed' }, 500);
   }
 });
 

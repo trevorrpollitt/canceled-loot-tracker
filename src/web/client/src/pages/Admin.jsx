@@ -7,13 +7,15 @@ function formatDate(ms) {
 }
 
 export default function Admin() {
-  const [lastCheck,       setLastCheck]       = useState(undefined);
-  const [syncing,         setSyncing]         = useState(false);
-  const [result,          setResult]          = useState(null); // { ok: true } | { error: string }
-  const [syncingWornBis,  setSyncingWornBis]  = useState(false);
-  const [wornBisResult,   setWornBisResult]   = useState(null); // { ok: true } | { error: string }
-  const [resetting,       setResetting]       = useState(false);
-  const [resetResult,     setResetResult]     = useState(null); // { ok: true } | { error: string }
+  const [lastCheck,           setLastCheck]           = useState(undefined);
+  const [syncing,             setSyncing]             = useState(false);
+  const [result,              setResult]              = useState(null); // { ok: true } | { error: string }
+  const [syncingWornBis,      setSyncingWornBis]      = useState(false);
+  const [wornBisResult,       setWornBisResult]       = useState(null); // { ok: true } | { error: string }
+  const [resetting,           setResetting]           = useState(false);
+  const [resetResult,         setResetResult]         = useState(null); // { ok: true } | { error: string }
+  const [backfillingAttend,   setBackfillingAttend]   = useState(false);
+  const [attendResult,        setAttendResult]        = useState(null); // { ok, raidsProcessed, attendeesInserted, errors } | { error }
 
   useEffect(() => {
     fetch(apiPath('/api/admin/wcl-status'), { credentials: 'include' })
@@ -69,6 +71,27 @@ export default function Admin() {
       setResetResult({ error: 'Request failed' });
     } finally {
       setResetting(false);
+    }
+  }
+
+  async function handleAttendanceBackfill() {
+    if (!window.confirm(
+      'Re-parse all WCL reports to fix raid attendance counts?\n\n' +
+      'This only updates who attended each raid — it does not touch worn BIS, tier snapshots, or encounters.\n\n' +
+      'The operation may take a minute for large raid histories.'
+    )) return;
+    setBackfillingAttend(true);
+    setAttendResult(null);
+    try {
+      const r = await fetch(apiPath('/api/admin/resync-attendance'), {
+        method: 'POST', credentials: 'include',
+      });
+      const d = await r.json();
+      setAttendResult(d.ok ? d : { error: d.error ?? 'Unknown error' });
+    } catch {
+      setAttendResult({ error: 'Request failed' });
+    } finally {
+      setBackfillingAttend(false);
     }
   }
 
@@ -150,6 +173,41 @@ export default function Admin() {
           </p>
         )}
 
+      </div>
+
+      {/* TEMPORARY — remove after running once in production to fix the attendeeIds.join('|') bug */}
+      <div className="card" style={{ marginTop: 24, borderColor: '#92400e' }}>
+        <div className="card-title" style={{ color: '#fbbf24' }}>⚠ Attendance Backfill (Temporary)</div>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+          Re-reads every WCL report in the DB to fix raid attendance counts corrupted by a bug
+          that split Discord IDs into individual characters. Only updates <em>who attended</em> each
+          raid — does not touch worn BIS, tier snapshots, or encounters. Safe to run multiple
+          times. Remove this card once attendance counts are correct.
+        </p>
+
+        <button
+          className="btn-secondary"
+          onClick={handleAttendanceBackfill}
+          disabled={backfillingAttend}
+        >
+          {backfillingAttend ? 'Backfilling…' : 'Backfill Attendance'}
+        </button>
+
+        {attendResult && (
+          attendResult.error
+            ? <p style={{ marginTop: 12, fontSize: 13, color: 'var(--danger, #e05)' }}>Error: {attendResult.error}</p>
+            : <div style={{ marginTop: 12, fontSize: 13 }}>
+                <p style={{ color: 'var(--bis)' }}>
+                  Done — {attendResult.raidsProcessed}/{attendResult.total} raids processed,{' '}
+                  {attendResult.attendeesInserted} attendee rows inserted.
+                </p>
+                {attendResult.errors?.length > 0 && (
+                  <ul style={{ color: 'var(--danger, #e05)', marginTop: 6, paddingLeft: 18 }}>
+                    {attendResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                )}
+              </div>
+        )}
       </div>
     </div>
   );

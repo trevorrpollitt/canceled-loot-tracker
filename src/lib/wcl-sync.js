@@ -65,6 +65,7 @@ import {
   getItemDb,
   getWornBis,
   upsertWornBis,
+  invalidateRaidsCache,
 } from './db.js';
 import {
   getValidEncounterIds,
@@ -359,6 +360,97 @@ export async function runWclSyncWornBisOnly(db, team) {
   const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap } = ctx;
   await syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap, { wornBisOnly: true, maxReports: WORN_BIS_RESYNC_REPORT_LIMIT });
   log.warn(`[wcl-sync] Worn BIS-only resync complete for team "${team.name}"`);
+}
+
+/**
+ * Backfill raid_attendees from WCL CombatantInfo for all existing raids.
+ * TEMPORARY — use once to repair data corrupted by the attendeeIds.join('|') bug.
+ * Only touches raid_attendees; does NOT update tier snapshots, worn BIS,
+ * raid encounters, or the wcl_last_check cursor.
+ * Remove this export after the one-time fix has been applied in production.
+ *
+ * @param {object} db   D1 database binding
+ * @param {{ id: number, name: string }} team
+ * @returns {{ total: number, raidsProcessed: number, attendeesInserted: number, errors: string[] }}
+ */
+export async function runAttendanceBackfill(db, team) {
+  log.warn(`[attendance-backfill] Starting for team "${team.name}"`);
+
+  const globalConfig = await getGlobalConfig(db);
+  const { wcl_client_id } = globalConfig;
+  const wcl_client_secret = process.env.WCL_CLIENT_SECRET;
+  if (!wcl_client_id || !wcl_client_secret) throw new Error('WCL credentials not configured');
+
+  const roster       = await getRoster(db, team.id);
+  const rosterLookup = buildRosterLookup(roster);
+
+  // Read all existing raid codes directly — ordered newest first so errors are visible quickly
+  const raidRows = await db.prepare(
+    'SELECT id, raid_id FROM raids WHERE team_id = ? ORDER BY date DESC'
+  ).bind(team.id).all().then(r => r.results);
+
+  log.verbose(`[attendance-backfill] Team "${team.name}": ${raidRows.length} raid(s) to process`);
+
+  let raidsProcessed    = 0;
+  let attendeesInserted = 0;
+  const errors          = [];
+
+  const attendeeStmt = db.prepare(
+    'INSERT OR IGNORE INTO raid_attendees (raid_id, user_id) VALUES (?, ?)'
+  );
+
+  for (const raid of raidRows) {
+    try {
+      const report = await getReportFights(raid.raid_id, wcl_client_id, wcl_client_secret);
+      if (!report?.fights?.length) {
+        log.verbose(`[attendance-backfill] Report ${raid.raid_id}: no fights — skipping`);
+        continue;
+      }
+
+      const actors = report.masterData?.actors ?? [];
+      const fights = report.fights;
+
+      // Pick the highest-ID completed fight (or the highest-ID fight if none completed)
+      const completedFights = fights.filter(f => !f.inProgress);
+      const fightForInfo    = (completedFights.length ? completedFights : fights)
+        .reduce((a, b) => b.id > a.id ? b : a);
+
+      const combatantEvents = await getCombatantInfo(
+        raid.raid_id, fightForInfo.id, wcl_client_id, wcl_client_secret
+      );
+
+      const userIds = [...new Set(
+        combatantEvents
+          .map(event => {
+            const actor = actors.find(a => a.id === event.sourceID);
+            if (!actor) return null;
+            return resolveActor(actor, rosterLookup)?.owner_id ?? null;
+          })
+          .filter(Boolean),
+      )];
+
+      log.verbose(`[attendance-backfill] Report ${raid.raid_id}: ${userIds.length} attendee(s) resolved`);
+
+      for (const userId of userIds) {
+        await attendeeStmt.bind(raid.id, userId).run();
+        attendeesInserted++;
+      }
+
+      raidsProcessed++;
+    } catch (err) {
+      log.error(`[attendance-backfill] Report ${raid.raid_id} failed:`, err.message);
+      errors.push(`${raid.raid_id}: ${err.message}`);
+    }
+  }
+
+  // Bust in-process raids cache so subsequent reads reflect the new attendees
+  invalidateRaidsCache(team.id);
+
+  log.warn(
+    `[attendance-backfill] Done: ${raidsProcessed}/${raidRows.length} raids processed, ` +
+    `${attendeesInserted} attendee rows inserted, ${errors.length} error(s)`
+  );
+  return { total: raidRows.length, raidsProcessed, attendeesInserted, errors };
 }
 
 // ── Per-team sync ──────────────────────────────────────────────────────────────

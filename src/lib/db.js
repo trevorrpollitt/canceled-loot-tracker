@@ -883,6 +883,10 @@ export async function upsertRaids(db, teamId, raids) {
   cacheInvalidate(`raids:${teamId}`);
 }
 
+export function invalidateRaidsCache(teamId) {
+  cacheInvalidate(`raids:${teamId}`);
+}
+
 // ── Raid encounters ───────────────────────────────────────────────────────────
 
 export async function getRaidEncounters(db, teamId) {
