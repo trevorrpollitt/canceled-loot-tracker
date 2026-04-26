@@ -198,7 +198,9 @@ export default function Admin() {
             ? <p style={{ marginTop: 12, fontSize: 13, color: 'var(--danger, #e05)' }}>Error: {attendResult.error}</p>
             : <div style={{ marginTop: 12, fontSize: 13 }}>
                 <p style={{ color: 'var(--bis)' }}>
-                  Done — {attendResult.raidsProcessed}/{attendResult.total} raids processed,{' '}
+                  Done — {attendResult.raidsProcessed}/{attendResult.total} raids processed
+                  {attendResult.raidsInserted > 0 && ` (${attendResult.raidsInserted} new raid(s) added to D1)`}
+                  {attendResult.raidsSkipped > 0 && `, ${attendResult.raidsSkipped} skipped (wrong zone or no fights)`},{' '}
                   {attendResult.attendeesInserted} attendee rows inserted.
                 </p>
                 {attendResult.errors?.length > 0 && (
