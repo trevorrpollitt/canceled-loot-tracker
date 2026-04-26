@@ -257,6 +257,28 @@ export async function setRosterServer(db, id, server) {
   cacheInvalidatePrefix('roster:');
 }
 
+/**
+ * Set the attendance adjustment for all characters belonging to the same player
+ * (same team_id + owner_id).  Pass charId to look up the owner_id.
+ */
+export async function setAttendanceAdjustment(db, teamId, charId, adjustment) {
+  // Look up the owner_id for this character first
+  const char = await first(db, 'SELECT owner_id FROM roster WHERE id = ? AND team_id = ?', charId, teamId);
+  if (!char) return;
+  const ownerId = char.owner_id;
+  if (ownerId) {
+    // Update all characters for this player so loot-history counts stay consistent
+    await run(db,
+      'UPDATE roster SET attendance_adjustment = ? WHERE team_id = ? AND owner_id = ?',
+      adjustment, teamId, ownerId
+    );
+  } else {
+    // Unlinked character — update only this row
+    await run(db, 'UPDATE roster SET attendance_adjustment = ? WHERE id = ?', adjustment, charId);
+  }
+  cacheInvalidate(`roster:${teamId}`);
+}
+
 export async function setSecondarySpecs(db, id, specs) {
   await run(db,
     'UPDATE roster SET secondary_specs = ? WHERE id = ?',

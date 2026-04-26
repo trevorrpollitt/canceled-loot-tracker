@@ -80,7 +80,7 @@ router.get('/history', async (c) => {
 
   const players = roster.map(char => {
     const s           = summaryByChar.get(char.id);
-    const raidsAttended = raidsByOwner[char.owner_id] ?? 0;
+    const raidsAttended = (raidsByOwner[char.owner_id] ?? 0) + (char.attendance_adjustment ?? 0);
 
     const bisM    = s?.bis_mythic    ?? 0;
     const bisH    = s?.bis_heroic    ?? 0;

@@ -625,6 +625,39 @@ a.wh-link.bis-sentinel { color: var(--text-muted); font-style: italic; }
 .roster-row:hover .roster-reassign-btn { opacity: 1; }
 .roster-reassign-btn:hover             { color: #60a5fa; }
 
+/* Attendance adjustment badge / inline input */
+.roster-attend-adj-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.1s;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+}
+.roster-row:hover .roster-attend-adj-btn { opacity: 1; }
+.roster-attend-adj-btn:hover             { color: var(--text); background: rgba(255,255,255,0.07); }
+.roster-attend-adj-btn.roster-attend-adj-btn-active {
+  opacity: 1;
+  color: #fbbf24;
+  background: rgba(251,191,36,0.12);
+}
+.roster-attend-adj-input {
+  width: 48px;
+  font-size: 11px;
+  padding: 1px 4px;
+  border: 1px solid var(--border, #444);
+  border-radius: 3px;
+  background: var(--surface, #1a1a1a);
+  color: var(--text);
+  text-align: center;
+}
+
 .roster-link-form-scope {
   font-size: 11px;
   color: var(--text-muted);

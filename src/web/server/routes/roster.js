@@ -24,6 +24,7 @@ import {
   setRosterStatus, setOwnerNick, setOwnerIdAllChars, setRosterOwner, addRosterChar, deleteRosterChar,
   renameRosterChar, setRosterServer, setSecondarySpecs,
   approvePrimarySpecChange, rejectPrimarySpecChange,
+  setAttendanceAdjustment,
 } from '../../../lib/db.js';
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getCharSpecs, specToRole } from '../../../lib/specs.js';
@@ -80,15 +81,16 @@ router.get('/', async (c) => {
         return a.char_name.localeCompare(b.char_name);
       })
       .map(r => ({
-        charId:    r.id,
-        charName:  r.char_name,
-        class:     r.class,
-        spec:      r.spec,
-        role:      r.role,
-        status:    r.status,
-        ownerId:   r.owner_id   ?? '',
-        ownerNick: r.owner_nick ?? '',
-        server:    r.server     ?? '',
+        charId:               r.id,
+        charName:             r.char_name,
+        class:                r.class,
+        spec:                 r.spec,
+        role:                 r.role,
+        status:               r.status,
+        ownerId:              r.owner_id              ?? '',
+        ownerNick:            r.owner_nick            ?? '',
+        server:               r.server                ?? '',
+        attendanceAdjustment: r.attendance_adjustment ?? 0,
       }));
     return c.json(sorted);
   } catch (err) {
@@ -435,6 +437,29 @@ router.post('/:charId/spec-change', async (c) => {
   } catch (err) {
     console.error('[ROSTER] Spec change error:', err);
     return c.json({ error: 'Failed to process spec change' }, 500);
+  }
+});
+
+// ── PATCH /api/roster/:charId/attendance-adjustment ───────────────────────────
+// Updates the manual attendance adjustment for all characters belonging to the
+// same player (same owner_id).  Accepts positive, negative, or zero integers.
+
+router.patch('/:charId/attendance-adjustment', async (c) => {
+  const { teamId } = c.get('session').user;
+  const charId     = Number(c.req.param('charId'));
+  if (!charId) return c.json({ error: 'charId is required' }, 400);
+
+  const { adjustment } = await c.req.json();
+  const adj = Number(adjustment);
+  if (!Number.isInteger(adj)) return c.json({ error: 'adjustment must be an integer' }, 400);
+
+  const db = c.env.DB;
+  try {
+    await setAttendanceAdjustment(db, teamId, charId, adj);
+    return c.json({ ok: true, adjustment: adj });
+  } catch (err) {
+    console.error('[ROSTER] attendance-adjustment error:', err);
+    return c.json({ error: 'Failed to save adjustment' }, 500);
   }
 });
 
