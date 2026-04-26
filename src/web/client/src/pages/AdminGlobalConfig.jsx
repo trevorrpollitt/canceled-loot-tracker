@@ -85,20 +85,25 @@ export default function AdminGlobalConfig() {
   const [wclResult,         setWclResult]         = useState(null);
   const [wclSaving,         setWclSaving]         = useState(false);
 
-  // Migration
+  // Migration (Sheets → D1)
   const [migrating,     setMigrating]     = useState(false);
   const [migrateResult, setMigrateResult] = useState(null);
 
-  // TEMP: BIS item ID backfill
-  const [bisBackfilling,  setBisBackfilling]  = useState(false);
-  const [bisBackfillResult, setBisBackfillResult] = useState(null);
+  // DB schema migrations
+  const [dbMigrations,     setDbMigrations]     = useState(null); // null = not loaded yet
+  const [dbMigrationsErr,  setDbMigrationsErr]  = useState(null);
+  const [dbMigRunning,     setDbMigRunning]     = useState(false);
+  const [dbMigRunResult,   setDbMigRunResult]   = useState(null);
+
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    fetch(apiPath('/api/admin/global-config'), { credentials: 'include' })
-      .then(r => r.json())
-      .then(({ config }) => {
+    Promise.all([
+      fetch(apiPath('/api/admin/global-config'), { credentials: 'include' }).then(r => r.json()),
+      fetch(apiPath('/api/admin/db-migrations'),  { credentials: 'include' }).then(r => r.json()),
+    ])
+      .then(([{ config }, migData]) => {
         const c = config ?? {};
         setGuildId(           c.guild_id                  ?? '');
         setGlobalOfficerRole( c.global_officer_role_id    ?? '');
@@ -108,6 +113,8 @@ export default function AdminGlobalConfig() {
         setWclZoneIds(        c.wcl_zone_ids              ?? '');
         setWclVeteranBonus(   c.wcl_veteran_bonus_id      ?? '');
         setWclCraftedBonuses( c.wcl_crafted_bonus_ids     ?? '');
+        if (migData.error) setDbMigrationsErr(migData.error);
+        else               setDbMigrations(migData.migrations ?? []);
       })
       .catch(() => setError('Failed to load global config'))
       .finally(() => setLoading(false));
@@ -147,24 +154,28 @@ export default function AdminGlobalConfig() {
     setWclSaving(false);
   }
 
-  async function runBisBackfill() {
-    setBisBackfilling(true); setBisBackfillResult(null);
+  async function runDbMigrations() {
+    const pending = (dbMigrations ?? []).filter(m => !m.applied);
+    if (!pending.length) return;
+    if (!window.confirm(
+      `Run ${pending.length} pending migration${pending.length !== 1 ? 's' : ''}?\n\n` +
+      pending.map(m => `• ${m.name}`).join('\n')
+    )) return;
+    setDbMigRunning(true); setDbMigRunResult(null);
     try {
-      const r = await fetch(apiPath('/api/admin/backfill-bis-item-ids'), {
+      const r = await fetch(apiPath('/api/admin/db-migrations/run'), {
         method: 'POST', credentials: 'include',
       });
       const d = await r.json();
-      if (d.ok) {
-        const msg = `Done — ${d.rowsProcessed} rows processed.` +
-          (d.notFound?.length ? ` ${d.notFound.length} item(s) not in item_db (set to null): ${d.notFound.join(', ')}` : '');
-        setBisBackfillResult({ ok: true, msg });
-      } else {
-        setBisBackfillResult({ error: d.error ?? 'Backfill failed' });
-      }
+      setDbMigRunResult(d);
+      // Refresh migration status after run
+      const statusR = await fetch(apiPath('/api/admin/db-migrations'), { credentials: 'include' });
+      const statusD = await statusR.json();
+      if (!statusD.error) setDbMigrations(statusD.migrations ?? []);
     } catch {
-      setBisBackfillResult({ error: 'Request failed' });
+      setDbMigRunResult({ error: 'Request failed' });
     } finally {
-      setBisBackfilling(false);
+      setDbMigRunning(false);
     }
   }
 
@@ -274,29 +285,81 @@ export default function AdminGlobalConfig() {
         <ResultMsg result={wclResult} />
       </div>
 
-      {/* ── TEMP: BIS item ID backfill ───────────────────────────────────── */}
-      {/* TODO: Remove this card (and the /api/admin/backfill-bis-item-ids endpoint
-               in admin.js) after running it once in production. */}
-      <div className="card" style={{ marginTop: 24, borderColor: '#7a4f00' }}>
-        <div className="card-title" style={{ color: '#f0a030' }}>⚠ One-Time Data Fix — Remove After Use</div>
-        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>
-          Normalises <code>true_bis_item_id</code> / <code>raid_bis_item_id</code> in{' '}
-          <code>bis_submissions</code> to consistent Blizzard item IDs. The column previously
-          contained a mix of D1 row PKs (from the Sheets migration), real Blizzard IDs, and NULLs,
-          which broke Wowhead tooltips on personal BIS submissions.
+      {/* ── Database Migrations ──────────────────────────────────────────── */}
+      <div className="card" style={{ marginTop: 24 }}>
+        <div className="card-title">Database Migrations</div>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+          Runs any pending D1 schema migrations. Migrations that were already applied
+          manually (e.g. via <code>wrangler d1 execute</code>) are detected automatically
+          and recorded without re-running.
         </p>
-        <p style={{ fontSize: 13, color: '#f0a030', marginBottom: 16 }}>
-          Run once after deploying, then remove this card and the{' '}
-          <code>POST /api/admin/backfill-bis-item-ids</code> endpoint from{' '}
-          <code>src/web/server/routes/admin.js</code>.
-        </p>
-        <button className="btn-primary" onClick={runBisBackfill} disabled={bisBackfilling}>
-          {bisBackfilling ? 'Running…' : 'Run BIS Item ID Backfill'}
-        </button>
-        {bisBackfillResult && (
-          <p style={{ marginTop: 12, fontSize: 13, color: bisBackfillResult.ok ? 'var(--bis)' : 'var(--danger, #e05)' }}>
-            {bisBackfillResult.ok ? bisBackfillResult.msg : `Error: ${bisBackfillResult.error}`}
+
+        {dbMigrationsErr && (
+          <p style={{ color: 'var(--danger, #e05)', fontSize: 13, marginBottom: 12 }}>
+            Error loading status: {dbMigrationsErr}
           </p>
+        )}
+
+        {dbMigrations && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 16 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border, #333)' }}>
+                <th style={{ textAlign: 'left', padding: '4px 8px 6px 0', color: 'var(--text-muted)', fontWeight: 500 }}>Migration</th>
+                <th style={{ textAlign: 'left', padding: '4px 8px 6px 0', color: 'var(--text-muted)', fontWeight: 500 }}>Description</th>
+                <th style={{ textAlign: 'center', padding: '4px 0 6px', color: 'var(--text-muted)', fontWeight: 500, width: 80 }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dbMigrations.map(m => (
+                <tr key={m.name} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <td style={{ padding: '5px 8px 5px 0', fontFamily: 'monospace', fontSize: 12 }}>{m.name}</td>
+                  <td style={{ padding: '5px 8px 5px 0', color: 'var(--text-muted)' }}>{m.description}</td>
+                  <td style={{ padding: '5px 0', textAlign: 'center' }}>
+                    {m.applied
+                      ? <span style={{ color: '#4caf50' }}>✓ Applied</span>
+                      : <span style={{ color: '#fbbf24' }}>⚠ Pending</span>
+                    }
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <button
+          className="btn-primary"
+          onClick={runDbMigrations}
+          disabled={dbMigRunning || !dbMigrations || !dbMigrations.some(m => !m.applied)}
+        >
+          {dbMigRunning
+            ? 'Running…'
+            : dbMigrations && !dbMigrations.some(m => !m.applied)
+              ? 'All migrations applied'
+              : 'Run Pending Migrations'
+          }
+        </button>
+
+        {dbMigRunResult && (
+          <div style={{ marginTop: 12, fontSize: 13 }}>
+            {dbMigRunResult.error ? (
+              <p style={{ color: 'var(--danger, #e05)' }}>Error: {dbMigRunResult.error}</p>
+            ) : (
+              <>
+                <p style={{ color: dbMigRunResult.ok ? '#4caf50' : '#fbbf24', marginBottom: 6 }}>
+                  {dbMigRunResult.appliedCount} migration{dbMigRunResult.appliedCount !== 1 ? 's' : ''} applied
+                  {dbMigRunResult.errorCount > 0 && `, ${dbMigRunResult.errorCount} error${dbMigRunResult.errorCount !== 1 ? 's' : ''}`}.
+                </p>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {(dbMigRunResult.results ?? []).filter(r => r.status !== 'already_applied').map(r => (
+                    <li key={r.name} style={{ color: r.status === 'error' ? 'var(--danger, #e05)' : r.note ? 'var(--text-muted)' : '#4caf50' }}>
+                      <code style={{ fontSize: 11 }}>{r.name}</code>
+                      {r.status === 'error' ? ` — Error: ${r.error}` : r.note ? ` — ${r.note}` : ' — applied'}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         )}
       </div>
 

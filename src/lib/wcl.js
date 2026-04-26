@@ -67,9 +67,10 @@ async function gql(query, variables, clientId, clientSecret) {
 // ── Queries ────────────────────────────────────────────────────────────────────
 
 const Q_REPORTS = `
-  query GetReports($guildId: Int!, $startTime: Float) {
+  query GetReports($guildId: Int!, $startTime: Float, $page: Int) {
     reportData {
-      reports(guildID: $guildId, startTime: $startTime, limit: 25) {
+      reports(guildID: $guildId, startTime: $startTime, limit: 25, page: $page) {
+        last_page
         data {
           code
           title
@@ -207,13 +208,23 @@ export async function getValidEncounterIds(zoneIds, clientId, clientSecret) {
  * @returns {object[]}  Array of report summary objects
  */
 export async function getReportsForGuild(guildId, sinceMs, clientId, clientSecret) {
-  const data = await gql(
-    Q_REPORTS,
-    { guildId, startTime: sinceMs || undefined },
-    clientId,
-    clientSecret,
-  );
-  return data.reportData?.reports?.data ?? [];
+  const all = [];
+  let page = 1;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const data = await gql(
+      Q_REPORTS,
+      { guildId, startTime: sinceMs || undefined, page },
+      clientId,
+      clientSecret,
+    );
+    const result = data.reportData?.reports;
+    const batch  = result?.data ?? [];
+    all.push(...batch);
+    if (page >= (result?.last_page ?? 1)) break;
+    page++;
+  }
+  return all;
 }
 
 /**

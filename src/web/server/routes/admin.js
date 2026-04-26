@@ -20,11 +20,12 @@ import {
   getEffectiveDefaultBis, getEffectiveDefaultBisForSpec, getAllTeams, getGlobalConfig, setGlobalConfigValue,
   getRclcResponseMapRows, setRclcResponseMap, getRosterPendingSpecChanges,
   getBisSubmissionsPending, getBisSubmissionsForChar, rebuildLootSummary,
-  invalidateBisSubmissionsCache,
+  getAppliedMigrations, runMigrations,
 } from '../../../lib/db.js';
+import { MIGRATIONS } from '../../../lib/migrations.js';
 import { applyRaidBisInference } from '../../../lib/bis-match.js';
 import { toCanonical, CLASS_SPECS, getArmorType, canUseWeapon, canDualWield, canHaveOffHand, getCharSpecs } from '../../../lib/specs.js';
-import { runWclSyncForTeam, runWclSyncWornBisOnly } from '../../../lib/wcl-sync.js';
+import { runWclSyncForTeam, runWclSyncWornBisOnly, runAttendanceBackfill } from '../../../lib/wcl-sync.js';
 import {
   getTeamRegistry      as sheetsGetTeamRegistry,
   getGlobalConfig      as sheetsGetGlobalConfig,
@@ -452,6 +453,26 @@ router.post('/wcl-sync-worn-bis', requireOfficer, async (c) => {
   }
 });
 
+// ── POST /api/admin/resync-attendance ─────────────────────────────────────────
+// TEMPORARY — backfills raid_attendees from WCL CombatantInfo for all existing
+// raids. Only fixes attendance; does not update worn BIS, tier snapshots, or
+// encounters. Remove after running once in production.
+
+router.post('/resync-attendance', requireOfficer, async (c) => {
+  const { teamId } = c.get('session').user;
+  const db = c.env.DB;
+  const allTeams = await getAllTeams(db);
+  const team = allTeams.find(t => t.id === teamId);
+  if (!team) return c.json({ error: 'Team not found' }, 404);
+  try {
+    const result = await runAttendanceBackfill(db, team);
+    return c.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[admin] resync-attendance error:', err);
+    return c.json({ error: err.message ?? 'Backfill failed' }, 500);
+  }
+});
+
 // ── Team Config ───────────────────────────────────────────────────────────────
 
 router.get('/team-config', requireOfficer, async (c) => {
@@ -859,61 +880,36 @@ router.post('/rebuild-loot-summary', requireOfficer, async (c) => {
   }
 });
 
-// ── POST /api/admin/backfill-bis-item-ids ─────────────────────────────────────
-// TEMPORARY — normalises bis_submissions.true_bis_item_id / raid_bis_item_id to
-// Blizzard item IDs (mixed legacy data from the Sheets migration).
-// Remove this endpoint after running it once in production.
+// ── GET /api/admin/db-migrations ──────────────────────────────────────────────
 
-router.post('/backfill-bis-item-ids', requireGlobalOfficer, async (c) => {
+router.get('/db-migrations', requireGlobalOfficer, async (c) => {
   const db = c.env.DB;
-  const SENTINELS = new Set(['<Tier>', '<Catalyst>', '<Crafted>']);
-
   try {
-    // Build name → Blizzard item_id lookup
-    const itemDbRows = await db.prepare('SELECT item_id, name FROM item_db').all()
-      .then(r => r.results);
-    const itemIdByName = new Map(
-      itemDbRows.map(r => [r.name.toLowerCase(), String(r.item_id)])
-    );
-
-    function resolve(name) {
-      if (!name || SENTINELS.has(name)) return null;
-      return itemIdByName.get(name.toLowerCase()) ?? null;
-    }
-
-    // Load every bis_submissions row
-    const rows = await db.prepare(
-      'SELECT id, true_bis, true_bis_item_id, raid_bis, raid_bis_item_id FROM bis_submissions'
-    ).all().then(r => r.results);
-
-    // Build UPDATE statements
-    const stmts = rows.map(row =>
-      db.prepare('UPDATE bis_submissions SET true_bis_item_id = ?, raid_bis_item_id = ? WHERE id = ?')
-        .bind(resolve(row.true_bis), resolve(row.raid_bis), row.id)
-    );
-
-    // Execute in chunks (D1 batch limit = 100)
-    await batchInsert(db, stmts);
-
-    // Bust in-process cache so next reads reflect the new values
-    invalidateBisSubmissionsCache();
-
-    // Collect items that had no item_db match (set to NULL)
-    const notFound = [...new Set(
-      rows.flatMap(row => {
-        const missing = [];
-        if (row.true_bis && !SENTINELS.has(row.true_bis) && !itemIdByName.has(row.true_bis.toLowerCase()))
-          missing.push(row.true_bis);
-        if (row.raid_bis && !SENTINELS.has(row.raid_bis) && !itemIdByName.has(row.raid_bis.toLowerCase()))
-          missing.push(row.raid_bis);
-        return missing;
-      })
-    )].sort();
-
-    return c.json({ ok: true, rowsProcessed: rows.length, notFound });
+    const applied = await getAppliedMigrations(db);
+    const status = MIGRATIONS.map(m => ({
+      name:        m.name,
+      description: m.description,
+      applied:     applied.has(m.name),
+    }));
+    return c.json({ migrations: status });
   } catch (err) {
-    console.error('[admin] backfill-bis-item-ids error:', err);
-    return c.json({ error: err.message ?? 'Backfill failed' }, 500);
+    console.error('[admin] db-migrations GET error:', err);
+    return c.json({ error: err.message ?? 'Failed to load migration status' }, 500);
+  }
+});
+
+// ── POST /api/admin/db-migrations/run ─────────────────────────────────────────
+
+router.post('/db-migrations/run', requireGlobalOfficer, async (c) => {
+  const db = c.env.DB;
+  try {
+    const results = await runMigrations(db, MIGRATIONS);
+    const appliedCount = results.filter(r => r.status === 'applied').length;
+    const errorCount   = results.filter(r => r.status === 'error').length;
+    return c.json({ ok: errorCount === 0, results, appliedCount, errorCount });
+  } catch (err) {
+    console.error('[admin] db-migrations run error:', err);
+    return c.json({ error: err.message ?? 'Migration run failed' }, 500);
   }
 });
 

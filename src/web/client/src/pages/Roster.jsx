@@ -837,6 +837,10 @@ export default function RosterPage() {
   const [renameSaving, setRenameSaving]           = useState(false);
   const [renameError,  setRenameError]            = useState(null);
 
+  // Attendance adjustment inline edit
+  const [adjustingAttendCharId, setAdjustingAttendCharId] = useState(null);
+  const [adjustAttendDraft,     setAdjustAttendDraft]     = useState('');
+
   useEffect(() => {
     fetch(apiPath('/api/roster'), { credentials: 'include' })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
@@ -1124,6 +1128,41 @@ export default function RosterPage() {
     }
   };
 
+  const handleSaveAttendAdj = async (char) => {
+    setAdjustingAttendCharId(null);
+    const adj = parseInt(adjustAttendDraft, 10);
+    if (isNaN(adj)) return;
+    const prev = char.attendanceAdjustment ?? 0;
+    if (adj === prev) return;
+
+    // Optimistic: update all characters sharing the same ownerId
+    setRoster(r => r.map(c =>
+      c.ownerId && c.ownerId === char.ownerId
+        ? { ...c, attendanceAdjustment: adj }
+        : c.charId === char.charId
+          ? { ...c, attendanceAdjustment: adj }
+          : c
+    ));
+    try {
+      const res = await fetch(apiPath(`/api/roster/${char.charId}/attendance-adjustment`), {
+        method:  'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ adjustment: adj }),
+      });
+      if (!res.ok) throw new Error(res.status);
+    } catch {
+      // Roll back
+      setRoster(r => r.map(c =>
+        c.ownerId && c.ownerId === char.ownerId
+          ? { ...c, attendanceAdjustment: prev }
+          : c.charId === char.charId
+            ? { ...c, attendanceAdjustment: prev }
+            : c
+      ));
+    }
+  };
+
   return (
     <div className="roster-page">
       <div className="page-header">
@@ -1227,6 +1266,37 @@ export default function RosterPage() {
                       title="Rename / edit server"
                       onClick={e => handleStartRename(e, char)}
                     >✎</button>
+                    {adjustingAttendCharId === char.charId ? (
+                      <input
+                        type="number"
+                        className="roster-attend-adj-input"
+                        value={adjustAttendDraft}
+                        autoFocus
+                        onClick={e => e.stopPropagation()}
+                        onChange={e => setAdjustAttendDraft(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter')  { e.preventDefault(); handleSaveAttendAdj(char); }
+                          if (e.key === 'Escape') setAdjustingAttendCharId(null);
+                        }}
+                        onBlur={() => handleSaveAttendAdj(char)}
+                      />
+                    ) : (
+                      <button
+                        className={`roster-attend-adj-btn${(char.attendanceAdjustment ?? 0) !== 0 ? ' roster-attend-adj-btn-active' : ''}`}
+                        title="Manual attendance adjustment — click to edit"
+                        onClick={e => {
+                          e.stopPropagation();
+                          setAdjustingAttendCharId(char.charId);
+                          setAdjustAttendDraft(String(char.attendanceAdjustment ?? 0));
+                        }}
+                      >
+                        {(char.attendanceAdjustment ?? 0) > 0
+                          ? `+${char.attendanceAdjustment}`
+                          : (char.attendanceAdjustment ?? 0) < 0
+                            ? String(char.attendanceAdjustment)
+                            : '±'}
+                      </button>
+                    )}
                   </span>
                 </td>
                 <td style={{ color: CLASS_COLORS[char.class] ?? 'inherit', fontWeight: CLASS_COLORS[char.class] ? 500 : undefined }}>{char.class || '—'}</td>

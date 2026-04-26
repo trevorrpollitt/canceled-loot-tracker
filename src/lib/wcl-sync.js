@@ -65,6 +65,7 @@ import {
   getItemDb,
   getWornBis,
   upsertWornBis,
+  invalidateRaidsCache,
 } from './db.js';
 import {
   getValidEncounterIds,
@@ -359,6 +360,185 @@ export async function runWclSyncWornBisOnly(db, team) {
   const { globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap } = ctx;
   await syncTeam(db, team, globalConfig, validEncounterIds, tierItemsByClass, trackRanges, craftedBonusIds, seasonStartMs, wcl_client_id, wcl_client_secret, itemDbMap, { wornBisOnly: true, maxReports: WORN_BIS_RESYNC_REPORT_LIMIT });
   log.warn(`[wcl-sync] Worn BIS-only resync complete for team "${team.name}"`);
+}
+
+/**
+ * Backfill raid_attendees from WCL CombatantInfo for all season raids.
+ *
+ * Fetches the full report list from WCL since season_start, then for each report:
+ *   - If the raid already exists in D1: re-inserts any missing attendee rows
+ *     (INSERT OR IGNORE — safe to run repeatedly).
+ *   - If the raid is missing from D1: inserts a new raids row with correct
+ *     date/instance/difficulty, then inserts attendees.
+ *
+ * Only touches raids + raid_attendees; does NOT update worn BIS, tier snapshots,
+ * encounters, or the wcl_last_check cursor.
+ *
+ * @param {object} db   D1 database binding
+ * @param {{ id: number, name: string }} team
+ * @returns {{ total: number, raidsProcessed: number, raidsInserted: number, attendeesInserted: number, errors: string[] }}
+ */
+export async function runAttendanceBackfill(db, team) {
+  log.warn(`[attendance-backfill] Starting for team "${team.name}"`);
+
+  const [globalConfig, teamConfig] = await Promise.all([
+    getGlobalConfig(db),
+    getTeamConfig(db, team.id),
+  ]);
+  const { wcl_client_id, season_start, wcl_zone_ids } = globalConfig;
+  const wcl_client_secret = process.env.WCL_CLIENT_SECRET;
+  if (!wcl_client_id || !wcl_client_secret) throw new Error('WCL credentials not configured');
+
+  const wclGuildId = teamConfig.wcl_guild_id ? Number(teamConfig.wcl_guild_id) : null;
+  if (!wclGuildId) throw new Error(`Team "${team.name}" has no wcl_guild_id configured`);
+
+  const seasonStartMs  = parseSheetDateMs(season_start);
+  const validZoneIds   = new Set(
+    String(wcl_zone_ids ?? '').split('|').map(Number).filter(Boolean)
+  );
+
+  const roster       = await getRoster(db, team.id);
+  const rosterLookup = buildRosterLookup(roster);
+
+  // Fetch all WCL reports for this team since season start
+  log.verbose(`[attendance-backfill] Fetching reports from WCL since ${new Date(seasonStartMs).toISOString()}`);
+  const wclReports = await getReportsForGuild(wclGuildId, seasonStartMs, wcl_client_id, wcl_client_secret);
+  wclReports.sort((a, b) => b.startTime - a.startTime); // newest first
+  log.verbose(`[attendance-backfill] Team "${team.name}": ${wclReports.length} WCL report(s) found`);
+
+  // Load existing D1 raid rows: code → integer PK
+  const existingRows = await db.prepare(
+    'SELECT id, raid_id FROM raids WHERE team_id = ? ORDER BY date DESC'
+  ).bind(team.id).all().then(r => r.results);
+  const existingCodes = new Map(existingRows.map(r => [r.raid_id, r.id]));
+  log.verbose(`[attendance-backfill] Team "${team.name}": ${existingCodes.size} raid(s) already in D1`);
+
+  const attendeeStmt = db.prepare(
+    'INSERT OR IGNORE INTO raid_attendees (raid_id, user_id) VALUES (?, ?)'
+  );
+
+  let raidsProcessed    = 0;
+  let raidsInserted     = 0;
+  let attendeesInserted = 0;
+  let raidsSkipped      = 0;
+  const errors          = [];
+
+  for (const report of wclReports) {
+    try {
+      // Skip reports from zones that don't match the configured raid zone IDs
+      // (e.g. Mythic+ logs, levelling logs, alt content uploaded to the same WCL guild)
+      if (validZoneIds.size > 0 && report.zone?.id != null && !validZoneIds.has(report.zone.id)) {
+        log.verbose(`[attendance-backfill] Report ${report.code}: zone ${report.zone.id} (${report.zone.name}) not in wcl_zone_ids — skipping`);
+        raidsSkipped++;
+        continue;
+      }
+
+      const reportData = await getReportFights(report.code, wcl_client_id, wcl_client_secret);
+      if (!reportData?.fights?.length) {
+        log.verbose(`[attendance-backfill] Report ${report.code}: no fights — skipping`);
+        raidsSkipped++;
+        continue;
+      }
+
+      const actors = reportData.masterData?.actors ?? [];
+      const fights = reportData.fights;
+
+      // Try each completed fight from highest ID to lowest until we get CombatantInfo
+      // events. Sale runs and multi-group logs often have the last fight belonging to
+      // a buyer group whose fight returns no events — falling back finds the real pull.
+      const completedFights = fights.filter(f => !f.inProgress)
+        .sort((a, b) => b.id - a.id); // highest ID first
+      const fightsToTry = completedFights.length ? completedFights : [...fights].sort((a, b) => b.id - a.id);
+
+      let combatantEvents = [];
+      for (const fight of fightsToTry) {
+        combatantEvents = await getCombatantInfo(
+          report.code, fight.id, wcl_client_id, wcl_client_secret
+        );
+        if (combatantEvents.length > 0) {
+          log.verbose(`[attendance-backfill] Report ${report.code}: got ${combatantEvents.length} combatant event(s) from fight ${fight.id}`);
+          break;
+        }
+        log.verbose(`[attendance-backfill] Report ${report.code}: fight ${fight.id} returned 0 combatant events — trying next`);
+      }
+
+      const attendeeIds = [...new Set(
+        combatantEvents
+          .map(event => {
+            const actor = actors.find(a => a.id === event.sourceID);
+            if (!actor) return null;
+            return resolveActor(actor, rosterLookup)?.owner_id ?? null;
+          })
+          .filter(Boolean),
+      )];
+
+      log.verbose(`[attendance-backfill] Report ${report.code}: ${attendeeIds.length} attendee(s) resolved`);
+
+      if (existingCodes.has(report.code)) {
+        // Already in D1 — scrub garbage rows first, then insert fresh attendees.
+        // The original sync bug iterated the pipe-separated attendee string
+        // character-by-character, leaving rows like user_id='0','1',...,'9','|'.
+        // Discord snowflakes are always ≥15 digits; anything shorter is junk.
+        const raidDbId = existingCodes.get(report.code);
+        const deleted = await db.prepare(
+          `DELETE FROM raid_attendees WHERE raid_id = ? AND (LENGTH(user_id) < 15 OR user_id GLOB '*[^0-9]*')`
+        ).bind(raidDbId).run();
+        if (deleted.meta?.changes > 0) {
+          log.warn(`[attendance-backfill] Report ${report.code}: deleted ${deleted.meta.changes} garbage attendee row(s)`);
+        }
+        // Normalize Sheets serial dates — the original migration stored dates as
+        // raw numeric serials (e.g. "46098") instead of ISO strings ("2026-03-17").
+        // Fix them opportunistically here so the Raids page displays correctly.
+        const raidDate = new Date(report.startTime).toISOString().split('T')[0];
+        const instance = report.zone?.name ?? '';
+        await db.prepare(
+          `UPDATE raids SET date = ?, instance = CASE WHEN instance = '' THEN ? ELSE instance END
+           WHERE id = ? AND (date GLOB '[0-9][0-9][0-9][0-9][0-9]' OR date GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]')`
+        ).bind(raidDate, instance, raidDbId).run();
+        for (const userId of attendeeIds) {
+          const res = await attendeeStmt.bind(raidDbId, userId).run();
+          if (res.meta?.changes > 0) attendeesInserted++;
+        }
+      } else {
+        // Missing from D1 — derive raid metadata and insert via upsertRaids
+        const validFights = fights.filter(f => f.encounterID !== 0);
+        const diffCounts  = {};
+        for (const f of validFights) {
+          if (f.difficulty != null) diffCounts[f.difficulty] = (diffCounts[f.difficulty] ?? 0) + 1;
+        }
+        const topDiffId       = Object.entries(diffCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+        const difficultyLabel = DIFFICULTY_LABEL[Number(topDiffId)] ?? String(topDiffId ?? '');
+        const raidDate        = new Date(report.startTime).toISOString().split('T')[0];
+        const instance        = report.zone?.name ?? '';
+
+        await upsertRaids(db, team.id, [{
+          raidId:     report.code,
+          date:       raidDate,
+          instance,
+          difficulty: difficultyLabel,
+          attendeeIds,
+        }]);
+        raidsInserted++;
+        attendeesInserted += attendeeIds.length;
+        log.warn(`[attendance-backfill] Report ${report.code}: inserted new raid row (${raidDate} ${instance} ${difficultyLabel}, ${attendeeIds.length} attendee(s))`);
+      }
+
+      raidsProcessed++;
+    } catch (err) {
+      log.error(`[attendance-backfill] Report ${report.code} failed:`, err.message);
+      errors.push(`${report.code}: ${err.message}`);
+    }
+  }
+
+  // upsertRaids already invalidates; call once more to cover the attendee-only path
+  invalidateRaidsCache(team.id);
+
+  log.warn(
+    `[attendance-backfill] Done: ${raidsProcessed}/${wclReports.length} processed, ` +
+    `${raidsSkipped} skipped (zone/no-fights), ` +
+    `${raidsInserted} new raid(s) inserted, ${attendeesInserted} attendee rows inserted, ${errors.length} error(s)`
+  );
+  return { total: wclReports.length, raidsProcessed, raidsSkipped, raidsInserted, attendeesInserted, errors };
 }
 
 // ── Per-team sync ──────────────────────────────────────────────────────────────
@@ -744,7 +924,7 @@ async function processReport(report, reportData, validEncounterIds, tierItemsByC
     date:        raidDate,
     instance,
     difficulty:  difficultyLabel,
-    attendeeIds: attendeeIds.join('|'),
+    attendeeIds,
   };
 
   // ── Raid Encounters rows ─────────────────────────────────────────────────────

@@ -257,6 +257,28 @@ export async function setRosterServer(db, id, server) {
   cacheInvalidatePrefix('roster:');
 }
 
+/**
+ * Set the attendance adjustment for all characters belonging to the same player
+ * (same team_id + owner_id).  Pass charId to look up the owner_id.
+ */
+export async function setAttendanceAdjustment(db, teamId, charId, adjustment) {
+  // Look up the owner_id for this character first
+  const char = await first(db, 'SELECT owner_id FROM roster WHERE id = ? AND team_id = ?', charId, teamId);
+  if (!char) return;
+  const ownerId = char.owner_id;
+  if (ownerId) {
+    // Update all characters for this player so loot-history counts stay consistent
+    await run(db,
+      'UPDATE roster SET attendance_adjustment = ? WHERE team_id = ? AND owner_id = ?',
+      adjustment, teamId, ownerId
+    );
+  } else {
+    // Unlinked character — update only this row
+    await run(db, 'UPDATE roster SET attendance_adjustment = ? WHERE id = ?', adjustment, charId);
+  }
+  cacheInvalidate(`roster:${teamId}`);
+}
+
 export async function setSecondarySpecs(db, id, specs) {
   await run(db,
     'UPDATE roster SET secondary_specs = ? WHERE id = ?',
@@ -894,6 +916,10 @@ export async function upsertRaids(db, teamId, raids) {
   cacheInvalidate(`raids:${teamId}`);
 }
 
+export function invalidateRaidsCache(teamId) {
+  cacheInvalidate(`raids:${teamId}`);
+}
+
 // ── Raid encounters ───────────────────────────────────────────────────────────
 
 export async function getRaidEncounters(db, teamId) {
@@ -1044,4 +1070,70 @@ export async function getRclcResponseMap(db, teamId) {
     }
     return map;
   });
+}
+
+// ── Schema migrations ─────────────────────────────────────────────────────────
+
+const BOOTSTRAP_SQL = `
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    name       TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`.trim();
+
+/**
+ * Ensure schema_migrations exists, then return a Set of already-applied names.
+ */
+export async function getAppliedMigrations(db) {
+  await db.prepare(BOOTSTRAP_SQL).run();
+  const rows = await all(db, 'SELECT name FROM schema_migrations ORDER BY name');
+  return new Set(rows.map(r => r.name));
+}
+
+/**
+ * Run any migrations from the registry that haven't been applied yet.
+ * Uses each migration's `check` function first — if the schema already matches
+ * (e.g. applied manually via wrangler), it records the migration as applied
+ * without re-running the SQL.
+ *
+ * @param {object}   db         D1 database binding
+ * @param {object[]} migrations MIGRATIONS array from migrations.js
+ * @returns {Array<{ name, status, appliedAt?, note?, error? }>}
+ */
+export async function runMigrations(db, migrations) {
+  await db.prepare(BOOTSTRAP_SQL).run();
+  const applied = await getAppliedMigrations(db);
+
+  const results = [];
+  for (const migration of migrations) {
+    if (applied.has(migration.name)) {
+      results.push({ name: migration.name, status: 'already_applied' });
+      continue;
+    }
+
+    // Check whether the schema already matches (pre-existing manual apply)
+    let alreadyApplied = false;
+    try {
+      alreadyApplied = await migration.check(db);
+    } catch {
+      // check query failed — assume not applied
+    }
+
+    if (alreadyApplied) {
+      await run(db, 'INSERT OR IGNORE INTO schema_migrations (name) VALUES (?)', migration.name);
+      results.push({ name: migration.name, status: 'applied', note: 'Schema already matched — recorded without re-running SQL' });
+      continue;
+    }
+
+    try {
+      await db.exec(migration.sql);
+      await run(db, 'INSERT OR IGNORE INTO schema_migrations (name) VALUES (?)', migration.name);
+      results.push({ name: migration.name, status: 'applied' });
+    } catch (err) {
+      results.push({ name: migration.name, status: 'error', error: err.message ?? String(err) });
+      break; // Stop — later migrations may depend on this one
+    }
+  }
+
+  return results;
 }

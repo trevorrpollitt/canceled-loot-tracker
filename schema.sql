@@ -98,7 +98,8 @@ CREATE TABLE roster (
   owner_nick          TEXT    NOT NULL DEFAULT '',
   server              TEXT    NOT NULL DEFAULT '',  -- only set when name conflicts exist
   secondary_specs     TEXT    NOT NULL DEFAULT '',  -- pipe-separated spec names
-  pending_primary_spec TEXT   NOT NULL DEFAULT ''   -- spec awaiting officer approval
+  pending_primary_spec TEXT   NOT NULL DEFAULT '',  -- spec awaiting officer approval
+  attendance_adjustment INTEGER NOT NULL DEFAULT 0  -- manual correction added to WCL attendance count
 );
 
 CREATE UNIQUE INDEX idx_roster_name_server ON roster(team_id, char_name, server);
@@ -228,6 +229,13 @@ CREATE TABLE default_bis_overrides (
   raid_bis         TEXT NOT NULL DEFAULT '',
   raid_bis_item_id TEXT         DEFAULT NULL,
   PRIMARY KEY (spec, slot, source)
+);
+
+-- Tracks which schema migrations have been applied (via the admin DB Migrations UI or runMigrations()).
+-- Bootstrapped automatically by getAppliedMigrations() — not required to exist before first use.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  name       TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ── Sentinel rows — satisfy FK constraints for any legacy bis_submissions rows ──
