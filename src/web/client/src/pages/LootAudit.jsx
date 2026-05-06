@@ -157,7 +157,11 @@ export default function LootAudit() {
                             {charId && !inRoster && (
                               <option value={charId}>{charName || `#${charId}`}</option>
                             )}
-                            {!charId && <option value="">— unlinked —</option>}
+                            {!charId && (
+                              <option value="">
+                                {charName ? `${charName} (unlinked)` : '— unlinked —'}
+                              </option>
+                            )}
                             {rosterMembers.map(r => (
                               <option key={r.charId} value={r.charId}>{r.charName}</option>
                             ))}
